@@ -1,0 +1,21 @@
+# Бинарники
+bin/
+*.exe
+
+# IDE
+.idea/
+.vscode/
+
+# ENV (секреты)
+.env
+
+# Зависимости
+vendor/
+
+# Тесты
+coverage.out
+*.test
+
+# OS
+.DS_Store
+Thumbs.db

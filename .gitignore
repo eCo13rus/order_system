@@ -20,5 +20,6 @@ coverage.out
 .DS_Store
 Thumbs.db
 
+.claude/agents/
 CLAUDE.md
 Order_Processing_System.pdf

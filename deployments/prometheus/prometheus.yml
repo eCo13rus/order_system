@@ -1,0 +1,113 @@
+# Prometheus Configuration for Order Processing System
+# =============================================================================
+
+global:
+  scrape_interval: 15s          # Интервал сбора метрик
+  evaluation_interval: 15s       # Интервал вычисления правил
+  external_labels:
+    monitor: 'order-system'
+    environment: 'development'
+
+# =============================================================================
+# Alertmanager Configuration (опционально)
+# =============================================================================
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# =============================================================================
+# Rule Files (опционально)
+# =============================================================================
+# rule_files:
+#   - "alerts/*.yml"
+
+# =============================================================================
+# Scrape Configurations
+# =============================================================================
+scrape_configs:
+  # ---------------------------------------------------------------------------
+  # Prometheus Self-Monitoring
+  # ---------------------------------------------------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # ---------------------------------------------------------------------------
+  # API Gateway (Gin HTTP)
+  # ---------------------------------------------------------------------------
+  - job_name: 'gateway'
+    static_configs:
+      - targets: ['gateway:9090']
+        labels:
+          service: 'gateway'
+          type: 'http'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ---------------------------------------------------------------------------
+  # User Service (gRPC)
+  # ---------------------------------------------------------------------------
+  - job_name: 'user-service'
+    static_configs:
+      - targets: ['user-service:9090']
+        labels:
+          service: 'user-service'
+          type: 'grpc'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ---------------------------------------------------------------------------
+  # Order Service (gRPC) - Saga Orchestrator
+  # ---------------------------------------------------------------------------
+  - job_name: 'order-service'
+    static_configs:
+      - targets: ['order-service:9090']
+        labels:
+          service: 'order-service'
+          type: 'grpc'
+          saga: 'orchestrator'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ---------------------------------------------------------------------------
+  # Payment Service (gRPC)
+  # ---------------------------------------------------------------------------
+  - job_name: 'payment-service'
+    static_configs:
+      - targets: ['payment-service:9090']
+        labels:
+          service: 'payment-service'
+          type: 'grpc'
+    metrics_path: /metrics
+    scrape_interval: 10s
+
+  # ---------------------------------------------------------------------------
+  # MySQL Exporter (если добавлен)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'mysql'
+  #   static_configs:
+  #     - targets: ['mysql-exporter:9104']
+  #       labels:
+  #         service: 'mysql'
+
+  # ---------------------------------------------------------------------------
+  # Redis Exporter (если добавлен)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+  #       labels:
+  #         service: 'redis'
+
+  # ---------------------------------------------------------------------------
+  # Kafka Exporter (если добавлен)
+  # ---------------------------------------------------------------------------
+  # - job_name: 'kafka'
+  #   static_configs:
+  #     - targets: ['kafka-exporter:9308']
+  #       labels:
+  #         service: 'kafka'

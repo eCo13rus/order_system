@@ -21,5 +21,6 @@ coverage.out
 Thumbs.db
 
 .claude/agents/
+.claude/session-notes.md
 CLAUDE.md
 Plan_Order_Processing_System.pdf

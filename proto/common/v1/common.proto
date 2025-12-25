@@ -1,0 +1,34 @@
+// Общие сообщения для всех сервисов Order Processing System
+syntax = "proto3";
+
+package common.v1;
+
+option go_package = "example.com/order-system/proto/common/v1;commonv1";
+
+// Пагинация для списковых запросов
+message Pagination {
+  // Номер страницы (начинается с 1)
+  int32 page = 1;
+  // Количество элементов на странице
+  int32 page_size = 2;
+}
+
+// Мета-информация о пагинации в ответе
+message PaginationMeta {
+  // Текущая страница
+  int32 current_page = 1;
+  // Размер страницы
+  int32 page_size = 2;
+  // Общее количество элементов
+  int64 total_items = 3;
+  // Общее количество страниц
+  int32 total_pages = 4;
+}
+
+// Денежная сумма (в минимальных единицах валюты, например копейках)
+message Money {
+  // Сумма в минимальных единицах (копейки/центы)
+  int64 amount = 1;
+  // Код валюты ISO 4217 (RUB, USD, EUR)
+  string currency = 2;
+}

@@ -8,6 +8,7 @@ bin/
 
 # ENV (секреты)
 .env
+secrets/
 
 # Зависимости
 vendor/
@@ -23,4 +24,5 @@ Thumbs.db
 .claude/agents/
 .claude/session-notes.md
 CLAUDE.md
-Plan_Order_Processing_System.pdf
+Plan_Order_System.pdf
+.mcp.json

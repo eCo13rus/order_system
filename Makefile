@@ -2,7 +2,7 @@
 # Order Processing System - Makefile
 # =============================================================================
 
-.PHONY: help proto build up down logs test lint migrate clean
+.PHONY: help proto build up down logs test lint migrate clean jwt-keys jwt-keys-4096
 
 # Переменные
 COMPOSE_FILE := deployments/docker/docker-compose.yml
@@ -21,10 +21,13 @@ help: ## Показать справку
 # =============================================================================
 proto: ## Генерация Go кода из .proto файлов
 	@echo "Генерация protobuf..."
-	@find proto -name "*.proto" -exec protoc \
-		--go_out=. --go_opt=paths=source_relative \
-		--go-grpc_out=. --go-grpc_opt=paths=source_relative \
-		{} \;
+	@protoc -I proto \
+		--go_out=proto --go_opt=paths=source_relative \
+		--go-grpc_out=proto --go-grpc_opt=paths=source_relative \
+		proto/common/v1/common.proto \
+		proto/user/v1/user.proto \
+		proto/order/v1/order.proto \
+		proto/payment/v1/payment.proto
 	@echo "Готово!"
 
 # =============================================================================
@@ -130,6 +133,32 @@ clean: ## Очистка артефактов сборки
 	go clean
 	rm -f coverage.out coverage.html
 	rm -rf bin/
+
+# =============================================================================
+# JWT Keys (RS256)
+# =============================================================================
+jwt-keys: ## Генерация RSA ключей для JWT (RS256)
+	@echo "Генерация RSA ключей для JWT..."
+	@mkdir -p secrets/jwt
+	@openssl genrsa -out secrets/jwt/private.pem 2048
+	@openssl rsa -in secrets/jwt/private.pem -pubout -out secrets/jwt/public.pem
+	@chmod 600 secrets/jwt/private.pem
+	@chmod 644 secrets/jwt/public.pem
+	@echo ""
+	@echo "Ключи созданы:"
+	@echo "  Приватный: secrets/jwt/private.pem (только User Service)"
+	@echo "  Публичный: secrets/jwt/public.pem (все сервисы)"
+	@echo ""
+	@echo "ВАЖНО: Добавьте secrets/ в .gitignore!"
+
+jwt-keys-4096: ## Генерация RSA 4096 ключей (повышенная безопасность)
+	@echo "Генерация RSA 4096 ключей для JWT..."
+	@mkdir -p secrets/jwt
+	@openssl genrsa -out secrets/jwt/private.pem 4096
+	@openssl rsa -in secrets/jwt/private.pem -pubout -out secrets/jwt/public.pem
+	@chmod 600 secrets/jwt/private.pem
+	@chmod 644 secrets/jwt/public.pem
+	@echo "Ключи RSA 4096 созданы в secrets/jwt/"
 
 # =============================================================================
 # Dependencies

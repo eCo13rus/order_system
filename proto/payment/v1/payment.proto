@@ -1,0 +1,120 @@
+// Payment Service — обработка платежей с идемпотентностью
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "example.com/order-system/proto/payment/v1;paymentv1";
+
+import "common/v1/common.proto";
+
+// PaymentService — сервис обработки платежей
+service PaymentService {
+  // Обработка платежа (идемпотентная операция)
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
+
+  // Получение информации о платеже
+  rpc GetPayment(GetPaymentRequest) returns (GetPaymentResponse);
+
+  // Возврат платежа (компенсирующая транзакция для Saga)
+  rpc RefundPayment(RefundPaymentRequest) returns (RefundPaymentResponse);
+}
+
+// === Обработка платежа ===
+
+message ProcessPaymentRequest {
+  // Идентификатор заказа
+  string order_id = 1;
+  // Сумма платежа
+  common.v1.Money amount = 2;
+  // Идемпотентный ключ (обязательный, защита от дублирования)
+  string idempotency_key = 3;
+  // Идентификатор пользователя (для верификации)
+  string user_id = 4;
+  // Метод оплаты (опционально)
+  optional string payment_method = 5;
+}
+
+message ProcessPaymentResponse {
+  // Идентификатор созданного платежа
+  string payment_id = 1;
+  // Статус платежа
+  PaymentStatus status = 2;
+  // Сообщение (детали обработки или ошибка)
+  string message = 3;
+}
+
+// === Получение платежа ===
+
+message GetPaymentRequest {
+  // Идентификатор платежа
+  string payment_id = 1;
+}
+
+message GetPaymentResponse {
+  // Данные платежа
+  Payment payment = 1;
+}
+
+// === Возврат платежа ===
+
+message RefundPaymentRequest {
+  // Идентификатор платежа для возврата
+  string payment_id = 1;
+  // Причина возврата (для логирования)
+  string reason = 2;
+  // Идемпотентный ключ для возврата
+  string idempotency_key = 3;
+}
+
+message RefundPaymentResponse {
+  // Успешность операции
+  bool success = 1;
+  // Идентификатор транзакции возврата
+  string refund_id = 2;
+  // Сообщение (детали или ошибка)
+  string message = 3;
+}
+
+// === Сущности ===
+
+// Статус платежа
+enum PaymentStatus {
+  // Неизвестный статус (значение по умолчанию)
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  // Ожидает обработки
+  PAYMENT_STATUS_PENDING = 1;
+  // Успешно завершен
+  PAYMENT_STATUS_COMPLETED = 2;
+  // Ошибка при обработке
+  PAYMENT_STATUS_FAILED = 3;
+  // Возвращен (refund)
+  PAYMENT_STATUS_REFUNDED = 4;
+}
+
+// Платеж
+message Payment {
+  // Уникальный идентификатор (UUID)
+  string id = 1;
+  // Идентификатор заказа
+  string order_id = 2;
+  // Идентификатор пользователя
+  string user_id = 3;
+  // Сумма платежа
+  common.v1.Money amount = 4;
+  // Статус платежа
+  PaymentStatus status = 5;
+  // Идемпотентный ключ
+  string idempotency_key = 6;
+  // Метод оплаты
+  string payment_method = 7;
+  // Внешний идентификатор транзакции (от платежного провайдера)
+  optional string external_transaction_id = 8;
+  // Идентификатор возврата (если был refund)
+  optional string refund_id = 9;
+  // Причина ошибки (если статус FAILED)
+  optional string failure_reason = 10;
+  // Дата создания (Unix timestamp в секундах)
+  int64 created_at = 11;
+  // Дата последнего обновления (Unix timestamp в секундах)
+  int64 updated_at = 12;
+}

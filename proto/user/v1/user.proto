@@ -1,0 +1,116 @@
+// User Service — аутентификация и управление пользователями
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "example.com/order-system/proto/user/v1;userv1";
+
+// UserService — сервис управления пользователями и аутентификации
+service UserService {
+  // Регистрация нового пользователя
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Аутентификация пользователя
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // Выход из системы (инвалидация токена)
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // Валидация токена (для внутреннего использования API Gateway)
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
+
+  // Получение информации о пользователе
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+}
+
+// === Регистрация ===
+
+message RegisterRequest {
+  // Email пользователя (уникальный)
+  string email = 1;
+  // Пароль (минимум 8 символов)
+  string password = 2;
+  // Имя пользователя
+  string name = 3;
+}
+
+message RegisterResponse {
+  // Идентификатор созданного пользователя
+  string user_id = 1;
+}
+
+// === Аутентификация ===
+
+message LoginRequest {
+  // Email пользователя
+  string email = 1;
+  // Пароль
+  string password = 2;
+}
+
+message LoginResponse {
+  // JWT access token (короткоживущий)
+  string access_token = 1;
+  // Refresh token (долгоживущий)
+  string refresh_token = 2;
+  // Время истечения access token (Unix timestamp)
+  int64 expires_at = 3;
+}
+
+// === Выход ===
+
+message LogoutRequest {
+  // Access token для инвалидации
+  string access_token = 1;
+}
+
+message LogoutResponse {
+  // Успешность операции
+  bool success = 1;
+}
+
+// === Валидация токена ===
+
+message ValidateTokenRequest {
+  // Access token для проверки
+  string access_token = 1;
+}
+
+message ValidateTokenResponse {
+  // Валиден ли токен
+  bool valid = 1;
+  // ID пользователя (если токен валиден)
+  string user_id = 2;
+  // Email пользователя (если токен валиден)
+  string email = 3;
+  // JTI токена (для трекинга)
+  string jti = 4;
+}
+
+// === Получение пользователя ===
+
+message GetUserRequest {
+  // Идентификатор пользователя
+  string user_id = 1;
+}
+
+message GetUserResponse {
+  // Данные пользователя
+  User user = 1;
+}
+
+// === Сущности ===
+
+// Пользователь системы
+message User {
+  // Уникальный идентификатор (UUID)
+  string id = 1;
+  // Email пользователя
+  string email = 2;
+  // Имя пользователя
+  string name = 3;
+  // Дата создания аккаунта (Unix timestamp в секундах)
+  int64 created_at = 4;
+  // Дата последнего обновления (Unix timestamp в секундах)
+  int64 updated_at = 5;
+}

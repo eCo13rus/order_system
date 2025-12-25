@@ -1,0 +1,137 @@
+// Order Service — управление заказами и Saga Orchestration
+syntax = "proto3";
+
+package order.v1;
+
+option go_package = "example.com/order-system/proto/order/v1;orderv1";
+
+import "common/v1/common.proto";
+
+// OrderService — сервис управления заказами
+service OrderService {
+  // Создание нового заказа (инициирует Saga)
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // Получение заказа по идентификатору
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+
+  // Получение списка заказов пользователя
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+
+  // Отмена заказа (инициирует компенсирующие транзакции)
+  rpc CancelOrder(CancelOrderRequest) returns (CancelOrderResponse);
+}
+
+// === Создание заказа ===
+
+message CreateOrderRequest {
+  // Идентификатор пользователя
+  string user_id = 1;
+  // Позиции заказа
+  repeated OrderItem items = 2;
+  // Идемпотентный ключ (для защиты от дублирования)
+  string idempotency_key = 3;
+}
+
+message CreateOrderResponse {
+  // Идентификатор созданного заказа
+  string order_id = 1;
+  // Начальный статус заказа
+  OrderStatus status = 2;
+}
+
+// === Получение заказа ===
+
+message GetOrderRequest {
+  // Идентификатор заказа
+  string order_id = 1;
+}
+
+message GetOrderResponse {
+  // Данные заказа
+  Order order = 1;
+}
+
+// === Список заказов ===
+
+message ListOrdersRequest {
+  // Идентификатор пользователя
+  string user_id = 1;
+  // Параметры пагинации
+  common.v1.Pagination pagination = 2;
+  // Фильтр по статусу (опционально)
+  optional OrderStatus status_filter = 3;
+}
+
+message ListOrdersResponse {
+  // Список заказов
+  repeated Order orders = 1;
+  // Мета-информация о пагинации
+  common.v1.PaginationMeta pagination_meta = 2;
+}
+
+// === Отмена заказа ===
+
+message CancelOrderRequest {
+  // Идентификатор заказа
+  string order_id = 1;
+  // Причина отмены (опционально)
+  string reason = 2;
+}
+
+message CancelOrderResponse {
+  // Успешность операции
+  bool success = 1;
+  // Сообщение (при ошибке)
+  string message = 2;
+}
+
+// === Сущности ===
+
+// Статус заказа
+enum OrderStatus {
+  // Неизвестный статус (значение по умолчанию)
+  ORDER_STATUS_UNSPECIFIED = 0;
+  // Ожидает обработки
+  ORDER_STATUS_PENDING = 1;
+  // Подтвержден (оплата прошла)
+  ORDER_STATUS_CONFIRMED = 2;
+  // Отменен пользователем или системой
+  ORDER_STATUS_CANCELLED = 3;
+  // Ошибка при обработке (Saga откатилась)
+  ORDER_STATUS_FAILED = 4;
+}
+
+// Заказ
+message Order {
+  // Уникальный идентификатор (UUID)
+  string id = 1;
+  // Идентификатор пользователя
+  string user_id = 2;
+  // Позиции заказа
+  repeated OrderItem items = 3;
+  // Общая сумма заказа
+  common.v1.Money total_amount = 4;
+  // Статус заказа
+  OrderStatus status = 5;
+  // Идентификатор платежа (если есть)
+  optional string payment_id = 6;
+  // Причина отмены/ошибки (если есть)
+  optional string failure_reason = 7;
+  // Дата создания (Unix timestamp в секундах)
+  int64 created_at = 8;
+  // Дата последнего обновления (Unix timestamp в секундах)
+  int64 updated_at = 9;
+}
+
+// Позиция заказа
+message OrderItem {
+  // Идентификатор товара/услуги
+  string product_id = 1;
+  // Название товара
+  string product_name = 2;
+  // Количество
+  int32 quantity = 3;
+  // Цена за единицу
+  common.v1.Money unit_price = 4;
+}

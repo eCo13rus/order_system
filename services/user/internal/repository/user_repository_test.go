@@ -38,7 +38,7 @@ func setupMockDB(t *testing.T) (*gorm.DB, sqlmock.Sqlmock, func()) {
 	})
 	require.NoError(t, err, "Ошибка инициализации GORM")
 
-	return gormDB, mock, func() { db.Close() }
+	return gormDB, mock, func() { _ = db.Close() }
 }
 
 // =====================================

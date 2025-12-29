@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+
+	"example.com/order-system/pkg/logger"
 )
 
 // Топики для Saga Pattern.
@@ -21,7 +23,7 @@ const (
 	TopicDLQ = "dlq.saga"
 )
 
-// Ключи для headers сообщений.
+// Ключи для headers сообщений Kafka.
 const (
 	// HeaderTraceID - идентификатор трассировки для distributed tracing.
 	HeaderTraceID = "trace_id"
@@ -31,17 +33,6 @@ const (
 
 	// HeaderTimestamp - временная метка создания сообщения.
 	HeaderTimestamp = "timestamp"
-)
-
-// Ключи для context.
-type contextKey string
-
-const (
-	// ContextKeyTraceID - ключ для trace_id в context.
-	ContextKeyTraceID contextKey = "trace_id"
-
-	// ContextKeyCorrelationID - ключ для correlation_id в context.
-	ContextKeyCorrelationID contextKey = "correlation_id"
 )
 
 // Config содержит настройки для подключения к Kafka.
@@ -115,31 +106,25 @@ func (m *Message) toKafkaMessage() kafka.Message {
 }
 
 // TraceIDFromContext извлекает trace_id из context.
+// Делегирует в pkg/logger для единообразной работы с контекстом.
 func TraceIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(ContextKeyTraceID); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return logger.TraceIDFromContext(ctx)
 }
 
 // CorrelationIDFromContext извлекает correlation_id из context.
+// Делегирует в pkg/logger для единообразной работы с контекстом.
 func CorrelationIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(ContextKeyCorrelationID); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return logger.CorrelationIDFromContext(ctx)
 }
 
 // ContextWithTraceID добавляет trace_id в context.
+// Делегирует в pkg/logger для единообразной работы с контекстом.
 func ContextWithTraceID(ctx context.Context, traceID string) context.Context {
-	return context.WithValue(ctx, ContextKeyTraceID, traceID)
+	return logger.WithTraceID(ctx, traceID)
 }
 
 // ContextWithCorrelationID добавляет correlation_id в context.
+// Делегирует в pkg/logger для единообразной работы с контекстом.
 func ContextWithCorrelationID(ctx context.Context, correlationID string) context.Context {
-	return context.WithValue(ctx, ContextKeyCorrelationID, correlationID)
+	return logger.WithCorrelationID(ctx, correlationID)
 }

@@ -8,24 +8,16 @@ import (
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	"example.com/order-system/pkg/logger"
 )
 
-// Ключи для metadata и context.
+// Ключи для gRPC metadata (HTTP headers).
 const (
 	// TraceIDKey - ключ для идентификатора трейса в metadata.
 	TraceIDKey = "x-trace-id"
 	// CorrelationIDKey - ключ для correlation ID в metadata.
 	CorrelationIDKey = "x-correlation-id"
-)
-
-// contextKey - тип для ключей контекста (избегаем коллизий).
-type contextKey string
-
-const (
-	// traceIDContextKey - ключ для хранения trace_id в context.
-	traceIDContextKey contextKey = "trace_id"
-	// correlationIDContextKey - ключ для хранения correlation_id в context.
-	correlationIDContextKey contextKey = "correlation_id"
 )
 
 // TracingUnaryInterceptor создает interceptor для извлечения/генерации
@@ -65,6 +57,7 @@ func TracingStreamInterceptor() grpc.StreamServerInterceptor {
 
 // extractTraceInfo извлекает trace_id и correlation_id из gRPC metadata.
 // Если ID не найдены, генерирует новые UUID.
+// Использует функции из pkg/logger для единообразной работы с контекстом.
 func extractTraceInfo(ctx context.Context) context.Context {
 	traceID := ""
 	correlationID := ""
@@ -87,33 +80,20 @@ func extractTraceInfo(ctx context.Context) context.Context {
 		correlationID = uuid.New().String()
 	}
 
-	// Добавляем в context.
-	ctx = context.WithValue(ctx, traceIDContextKey, traceID)
-	ctx = context.WithValue(ctx, correlationIDContextKey, correlationID)
-
-	return ctx
+	// Используем единый источник функций из pkg/logger.
+	return logger.NewContextWithIDs(ctx, traceID, correlationID)
 }
 
 // TraceIDFromContext извлекает trace_id из context.
-// Возвращает пустую строку если не найден.
+// Делегирует в pkg/logger для единообразия.
 func TraceIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(traceIDContextKey); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return logger.TraceIDFromContext(ctx)
 }
 
 // CorrelationIDFromContext извлекает correlation_id из context.
-// Возвращает пустую строку если не найден.
+// Делегирует в pkg/logger для единообразия.
 func CorrelationIDFromContext(ctx context.Context) string {
-	if v := ctx.Value(correlationIDContextKey); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return logger.CorrelationIDFromContext(ctx)
 }
 
 // InjectTraceMetadata добавляет trace_id и correlation_id в исходящую metadata.

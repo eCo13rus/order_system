@@ -25,3 +25,19 @@ type UserService interface {
 	// ValidateToken проверяет валидность токена.
 	ValidateToken(ctx context.Context, accessToken string) (*client.TokenInfo, error)
 }
+
+// OrderService — интерфейс для взаимодействия с Order Service.
+// Позволяет мокировать gRPC клиент в тестах.
+type OrderService interface {
+	// CreateOrder создаёт новый заказ.
+	CreateOrder(ctx context.Context, userID, idempotencyKey string, items []client.OrderItem) (*client.CreateOrderResult, error)
+
+	// GetOrder возвращает заказ по ID.
+	GetOrder(ctx context.Context, orderID string) (*client.Order, error)
+
+	// ListOrders возвращает список заказов пользователя.
+	ListOrders(ctx context.Context, userID string, status *string, page, pageSize int) (*client.ListOrdersResult, error)
+
+	// CancelOrder отменяет заказ.
+	CancelOrder(ctx context.Context, orderID string) error
+}

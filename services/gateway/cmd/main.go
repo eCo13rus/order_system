@@ -75,6 +75,20 @@ func main() {
 		}
 	}()
 
+	// gRPC клиент к Order Service
+	orderClient, err := client.NewOrderClient(client.OrderClientConfig{
+		Addr:    cfg.GRPC.OrderServiceAddr,
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Ошибка подключения к Order Service")
+	}
+	defer func() {
+		if err := orderClient.Close(); err != nil {
+			logger.Error().Err(err).Msg("Ошибка закрытия Order Service клиента")
+		}
+	}()
+
 	// === Инициализация middleware ===
 
 	// Tracing middleware (Correlation ID, Trace ID)
@@ -101,6 +115,7 @@ func main() {
 
 	router := handler.NewRouter(handler.RouterConfig{
 		UserClient:  userClient,
+		OrderClient: orderClient,
 		AuthMW:      authMW,
 		RateLimitMW: rateLimitMW,
 		TracingMW:   tracingMW,

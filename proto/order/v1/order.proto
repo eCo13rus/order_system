@@ -75,8 +75,6 @@ message ListOrdersResponse {
 message CancelOrderRequest {
   // Идентификатор заказа
   string order_id = 1;
-  // Причина отмены (опционально)
-  string reason = 2;
 }
 
 message CancelOrderResponse {

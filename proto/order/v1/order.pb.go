@@ -412,9 +412,7 @@ func (x *ListOrdersResponse) GetPaginationMeta() *v1.PaginationMeta {
 type CancelOrderRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Идентификатор заказа
-	OrderId string `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
-	// Причина отмены (опционально)
-	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	OrderId       string `protobuf:"bytes,1,opt,name=order_id,json=orderId,proto3" json:"order_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -452,13 +450,6 @@ func (*CancelOrderRequest) Descriptor() ([]byte, []int) {
 func (x *CancelOrderRequest) GetOrderId() string {
 	if x != nil {
 		return x.OrderId
-	}
-	return ""
-}
-
-func (x *CancelOrderRequest) GetReason() string {
-	if x != nil {
-		return x.Reason
 	}
 	return ""
 }
@@ -733,10 +724,9 @@ const file_order_v1_order_proto_rawDesc = "" +
 	"\x0e_status_filter\"\x81\x01\n" +
 	"\x12ListOrdersResponse\x12'\n" +
 	"\x06orders\x18\x01 \x03(\v2\x0f.order.v1.OrderR\x06orders\x12B\n" +
-	"\x0fpagination_meta\x18\x02 \x01(\v2\x19.common.v1.PaginationMetaR\x0epaginationMeta\"G\n" +
+	"\x0fpagination_meta\x18\x02 \x01(\v2\x19.common.v1.PaginationMetaR\x0epaginationMeta\"/\n" +
 	"\x12CancelOrderRequest\x12\x19\n" +
-	"\border_id\x18\x01 \x01(\tR\aorderId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"I\n" +
+	"\border_id\x18\x01 \x01(\tR\aorderId\"I\n" +
 	"\x13CancelOrderResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\xef\x02\n" +

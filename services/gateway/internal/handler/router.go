@@ -12,6 +12,7 @@ import (
 type Router struct {
 	engine      *gin.Engine
 	userClient  *client.UserClient
+	orderClient *client.OrderClient
 	authMW      *middleware.AuthMiddleware
 	rateLimitMW *middleware.RateLimitMiddleware
 	tracingMW   *middleware.TracingMiddleware
@@ -20,6 +21,7 @@ type Router struct {
 // RouterConfig — параметры для создания роутера.
 type RouterConfig struct {
 	UserClient  *client.UserClient
+	OrderClient *client.OrderClient
 	AuthMW      *middleware.AuthMiddleware
 	RateLimitMW *middleware.RateLimitMiddleware
 	TracingMW   *middleware.TracingMiddleware
@@ -42,6 +44,7 @@ func NewRouter(cfg RouterConfig) *Router {
 	r := &Router{
 		engine:      engine,
 		userClient:  cfg.UserClient,
+		orderClient: cfg.OrderClient,
 		authMW:      cfg.AuthMW,
 		rateLimitMW: cfg.RateLimitMW,
 		tracingMW:   cfg.TracingMW,
@@ -87,6 +90,21 @@ func (r *Router) setupRoutes() {
 	{
 		users.GET("/me", userHandler.GetMe)
 		users.GET("/:id", userHandler.GetUser)
+	}
+
+	// === Order routes (защищённые) ===
+	if r.orderClient != nil {
+		orderHandler := NewOrderHandler(r.orderClient)
+		orders := v1.Group("/orders")
+		if r.authMW != nil {
+			orders.Use(r.authMW.Handle())
+		}
+		{
+			orders.POST("", orderHandler.CreateOrder)
+			orders.GET("", orderHandler.ListOrders)
+			orders.GET("/:id", orderHandler.GetOrder)
+			orders.DELETE("/:id", orderHandler.CancelOrder)
+		}
 	}
 }
 

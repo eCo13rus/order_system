@@ -131,18 +131,40 @@ func (o *Order) Cancel() error {
 	return nil
 }
 
+// CanConfirm проверяет, можно ли подтвердить заказ.
+// Подтвердить можно только заказ в статусе PENDING.
+func (o *Order) CanConfirm() bool {
+	return o.Status == OrderStatusPending
+}
+
 // Confirm подтверждает заказ после успешной оплаты.
-func (o *Order) Confirm(paymentID string) {
+// Возвращает ошибку, если заказ не в статусе PENDING.
+func (o *Order) Confirm(paymentID string) error {
+	if !o.CanConfirm() {
+		return ErrOrderCannotConfirm
+	}
 	o.Status = OrderStatusConfirmed
 	o.PaymentID = &paymentID
 	o.UpdatedAt = time.Now()
+	return nil
+}
+
+// CanFail проверяет, можно ли пометить заказ как failed.
+// Пометить как failed можно только заказ в статусе PENDING.
+func (o *Order) CanFail() bool {
+	return o.Status == OrderStatusPending
 }
 
 // Fail помечает заказ как неудачный с указанием причины.
-func (o *Order) Fail(reason string) {
+// Возвращает ошибку, если заказ не в статусе PENDING.
+func (o *Order) Fail(reason string) error {
+	if !o.CanFail() {
+		return ErrOrderCannotFail
+	}
 	o.Status = OrderStatusFailed
 	o.FailureReason = &reason
 	o.UpdatedAt = time.Now()
+	return nil
 }
 
 // OrderItem — позиция заказа.

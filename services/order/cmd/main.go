@@ -1,5 +1,6 @@
 // Order Service — микросервис управления заказами и Saga Orchestrator.
 // Предоставляет gRPC API для создания, получения, отмены заказов.
+// Координирует распределённые транзакции через Saga Pattern.
 package main
 
 import (
@@ -17,11 +18,13 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"example.com/order-system/pkg/config"
+	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/middleware"
 	orderv1 "example.com/order-system/proto/order/v1"
 	ordergrpc "example.com/order-system/services/order/internal/grpc"
 	"example.com/order-system/services/order/internal/repository"
+	"example.com/order-system/services/order/internal/saga"
 	"example.com/order-system/services/order/internal/service"
 )
 
@@ -56,7 +59,55 @@ func main() {
 
 	// Создаём слои приложения (Clean Architecture)
 	orderRepo := repository.NewOrderRepository(db)
-	orderService := service.NewOrderService(orderRepo)
+	sagaRepo := saga.NewSagaRepository(db)
+	outboxRepo := saga.NewOutboxRepository(db)
+
+	// Создаём Saga Orchestrator (если Kafka настроена)
+	var orchestrator saga.Orchestrator
+	var kafkaProducer *kafka.Producer
+	var outboxWorker *saga.OutboxWorker
+	var replyConsumer *saga.ReplyConsumer
+
+	if len(cfg.Kafka.Brokers) > 0 {
+		log.Info().Strs("brokers", cfg.Kafka.Brokers).Msg("Инициализация Kafka для Saga")
+
+		// Создаём топики если не существуют (idempotent)
+		if err := kafka.EnsureTopics(cfg.Kafka.Brokers, kafka.DefaultSagaTopics()); err != nil {
+			log.Warn().Err(err).Msg("Не удалось создать топики (возможно Kafka недоступна)")
+		}
+
+		// Создаём Kafka Producer для Outbox Worker
+		var err error
+		kafkaProducer, err = kafka.NewProducer(kafka.Config{Brokers: cfg.Kafka.Brokers})
+		if err != nil {
+			log.Fatal().Err(err).Msg("Ошибка создания Kafka Producer")
+		}
+
+		// Создаём Orchestrator (outboxRepo не нужен — записи создаются атомарно через SagaRepository)
+		orchestrator = saga.NewOrchestrator(sagaRepo, orderRepo)
+
+		// Создаём Outbox Worker
+		outboxWorker = saga.NewOutboxWorker(outboxRepo, kafkaProducer, saga.DefaultWorkerConfig())
+
+		// Создаём Reply Consumer
+		kafkaConsumer, err := kafka.NewConsumer(
+			kafka.Config{Brokers: cfg.Kafka.Brokers},
+			kafka.TopicSagaReplies,
+			"order-service-saga-consumer",
+		)
+		if err != nil {
+			log.Fatal().Err(err).Msg("Ошибка создания Kafka Consumer")
+		}
+		kafkaConsumer.SetDLQProducer(kafkaProducer)
+		replyConsumer = saga.NewReplyConsumer(kafkaConsumer, orchestrator)
+
+		log.Info().Msg("Saga Orchestrator инициализирован")
+	} else {
+		log.Warn().Msg("Kafka не настроена — Saga Orchestrator отключен")
+	}
+
+	// Создаём OrderService с Orchestrator (может быть nil)
+	orderService := service.NewOrderService(orderRepo, orchestrator)
 	orderHandler := ordergrpc.NewHandler(orderService)
 
 	// Создаём gRPC сервер с middleware
@@ -75,7 +126,27 @@ func main() {
 		log.Fatal().Err(err).Str("addr", addr).Msg("Ошибка создания listener")
 	}
 
-	// Graceful shutdown
+	// Контекст для graceful shutdown всех горутин
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Запускаем Saga компоненты (если Kafka настроена)
+	if outboxWorker != nil {
+		go func() {
+			log.Info().Msg("Запуск Outbox Worker")
+			outboxWorker.Run(ctx)
+		}()
+	}
+
+	if replyConsumer != nil {
+		go func() {
+			log.Info().Msg("Запуск Reply Consumer")
+			if err := replyConsumer.Run(ctx); err != nil && err != context.Canceled {
+				log.Error().Err(err).Msg("Ошибка Reply Consumer")
+			}
+		}()
+	}
+
+	// Запускаем gRPC сервер
 	go func() {
 		log.Info().Str("addr", addr).Msg("gRPC сервер запущен")
 		if err := grpcServer.Serve(listener); err != nil {
@@ -90,8 +161,23 @@ func main() {
 
 	log.Info().Msg("Получен сигнал завершения, останавливаем сервер...")
 
+	// Отменяем контекст — останавливаем Outbox Worker и Reply Consumer
+	cancel()
+
 	// Graceful stop gRPC сервера
 	grpcServer.GracefulStop()
+
+	// Закрываем Kafka компоненты
+	if replyConsumer != nil {
+		if err := replyConsumer.Close(); err != nil {
+			log.Error().Err(err).Msg("Ошибка закрытия Reply Consumer")
+		}
+	}
+	if kafkaProducer != nil {
+		if err := kafkaProducer.Close(); err != nil {
+			log.Error().Err(err).Msg("Ошибка закрытия Kafka Producer")
+		}
+	}
 
 	// Закрываем подключение к MySQL
 	if sqlDB, err := db.DB(); err == nil && sqlDB != nil {

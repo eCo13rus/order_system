@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // =====================================
@@ -478,8 +479,9 @@ func TestOrder_Confirm(t *testing.T) {
 		Status: OrderStatusPending,
 	}
 
-	order.Confirm("payment-123")
+	err := order.Confirm("payment-123")
 
+	require.NoError(t, err)
 	assert.Equal(t, OrderStatusConfirmed, order.Status)
 	assert.NotNil(t, order.PaymentID)
 	assert.Equal(t, "payment-123", *order.PaymentID)
@@ -492,8 +494,9 @@ func TestOrder_Fail(t *testing.T) {
 		Status: OrderStatusPending,
 	}
 
-	order.Fail("платёж отклонён")
+	err := order.Fail("платёж отклонён")
 
+	require.NoError(t, err)
 	assert.Equal(t, OrderStatusFailed, order.Status)
 	assert.NotNil(t, order.FailureReason)
 	assert.Equal(t, "платёж отклонён", *order.FailureReason)

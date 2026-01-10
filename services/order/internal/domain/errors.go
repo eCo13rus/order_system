@@ -30,6 +30,12 @@ var (
 	// ErrOrderCannotCancel возвращается при попытке отменить заказ в неподходящем статусе.
 	ErrOrderCannotCancel = errors.New("заказ нельзя отменить в текущем статусе")
 
+	// ErrOrderCannotConfirm возвращается при попытке подтвердить заказ в неподходящем статусе.
+	ErrOrderCannotConfirm = errors.New("заказ нельзя подтвердить в текущем статусе")
+
+	// ErrOrderCannotFail возвращается при попытке пометить заказ как failed в неподходящем статусе.
+	ErrOrderCannotFail = errors.New("заказ нельзя пометить как failed в текущем статусе")
+
 	// ErrDuplicateOrder возвращается при попытке создать заказ с уже существующим idempotency_key.
 	ErrDuplicateOrder = errors.New("заказ с таким idempotency_key уже существует")
 )

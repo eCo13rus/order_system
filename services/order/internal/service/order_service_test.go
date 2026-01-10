@@ -11,47 +11,40 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"example.com/order-system/services/order/internal/domain"
+	"example.com/order-system/services/order/internal/saga"
+	"example.com/order-system/services/order/internal/testutil"
 )
 
 // =====================================
-// Мок для OrderRepository
+// Алиас MockOrderRepository из testutil (DRY)
 // =====================================
 
-// MockOrderRepository — мок для OrderRepository.
-type MockOrderRepository struct {
+type MockOrderRepository = testutil.MockOrderRepository
+
+// =====================================
+// Мок для Orchestrator
+// =====================================
+
+// MockOrchestrator — мок для saga.Orchestrator.
+// Остаётся локально (зависит от saga.Reply — избегаем circular import).
+type MockOrchestrator struct {
 	mock.Mock
 }
 
-func (m *MockOrderRepository) Create(ctx context.Context, order *domain.Order) error {
+func (m *MockOrchestrator) CreateOrderWithSaga(ctx context.Context, order *domain.Order) error {
 	return m.Called(ctx, order).Error(0)
 }
 
-func (m *MockOrderRepository) GetByID(ctx context.Context, orderID string) (*domain.Order, error) {
-	args := m.Called(ctx, orderID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.Order), args.Error(1)
+func (m *MockOrchestrator) StartSaga(ctx context.Context, order *domain.Order) error {
+	return m.Called(ctx, order).Error(0)
 }
 
-func (m *MockOrderRepository) GetByIdempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Order, error) {
-	args := m.Called(ctx, idempotencyKey)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*domain.Order), args.Error(1)
+func (m *MockOrchestrator) HandlePaymentReply(ctx context.Context, reply *saga.Reply) error {
+	return m.Called(ctx, reply).Error(0)
 }
 
-func (m *MockOrderRepository) ListByUserID(ctx context.Context, userID string, status *domain.OrderStatus, offset, limit int) ([]*domain.Order, int64, error) {
-	args := m.Called(ctx, userID, status, offset, limit)
-	if args.Get(0) == nil {
-		return nil, args.Get(1).(int64), args.Error(2)
-	}
-	return args.Get(0).([]*domain.Order), args.Get(1).(int64), args.Error(2)
-}
-
-func (m *MockOrderRepository) UpdateStatus(ctx context.Context, orderID string, status domain.OrderStatus, paymentID, failureReason *string) error {
-	return m.Called(ctx, orderID, status, paymentID, failureReason).Error(0)
+func (m *MockOrchestrator) CompensateSaga(ctx context.Context, sagaID string, reason string) error {
+	return m.Called(ctx, sagaID, reason).Error(0)
 }
 
 // =====================================
@@ -68,7 +61,7 @@ func TestOrderService_CreateOrder(t *testing.T) {
 	mockRepo.On("Create", mock.Anything, mock.AnythingOfType("*domain.Order")).
 		Return(nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil) // nil orchestrator для тестов без саги
 
 	items := []domain.OrderItem{
 		{
@@ -93,6 +86,81 @@ func TestOrderService_CreateOrder(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+// TestOrderService_CreateOrder_WithSaga тестирует создание заказа с запуском саги.
+// ВАЖНО: теперь используется CreateOrderWithSaga — атомарное создание order+saga+outbox.
+func TestOrderService_CreateOrder_WithSaga(t *testing.T) {
+	mockRepo := new(MockOrderRepository)
+	mockOrch := new(MockOrchestrator)
+
+	// Идемпотентность: заказ не найден (первый запрос)
+	mockRepo.On("GetByIdempotencyKey", mock.Anything, "idem-key-saga").
+		Return(nil, domain.ErrOrderNotFound)
+
+	// Ожидаем АТОМАРНОЕ создание через CreateOrderWithSaga (НЕ repo.Create + StartSaga!)
+	mockOrch.On("CreateOrderWithSaga", mock.Anything, mock.AnythingOfType("*domain.Order")).
+		Return(nil)
+
+	svc := NewOrderService(mockRepo, mockOrch)
+
+	items := []domain.OrderItem{
+		{
+			ProductID:   "product-1",
+			ProductName: "Товар 1",
+			Quantity:    3,
+			UnitPrice:   domain.Money{Amount: 5000, Currency: "RUB"},
+		},
+	}
+
+	order, err := svc.CreateOrder(context.Background(), "user-123", "idem-key-saga", items)
+
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, domain.OrderStatusPending, order.Status)
+	assert.Equal(t, int64(15000), order.TotalAmount.Amount) // 3 * 5000
+
+	// repo.Create НЕ должен вызываться — всё идёт через orchestrator
+	mockRepo.AssertNotCalled(t, "Create")
+	mockRepo.AssertExpectations(t)
+	mockOrch.AssertExpectations(t)
+}
+
+// TestOrderService_CreateOrder_SagaError тестирует, что ошибка саги возвращается клиенту.
+// ВАЖНО: теперь атомарное создание — если сага падает, заказ НЕ создаётся, клиент получает ошибку.
+func TestOrderService_CreateOrder_SagaError(t *testing.T) {
+	mockRepo := new(MockOrderRepository)
+	mockOrch := new(MockOrchestrator)
+
+	mockRepo.On("GetByIdempotencyKey", mock.Anything, "idem-key-err").
+		Return(nil, domain.ErrOrderNotFound)
+
+	// CreateOrderWithSaga падает — ВСЁ откатывается, клиент получает ошибку
+	mockOrch.On("CreateOrderWithSaga", mock.Anything, mock.AnythingOfType("*domain.Order")).
+		Return(errors.New("db transaction failed"))
+
+	svc := NewOrderService(mockRepo, mockOrch)
+
+	items := []domain.OrderItem{
+		{
+			ProductID:   "product-1",
+			ProductName: "Товар 1",
+			Quantity:    1,
+			UnitPrice:   domain.Money{Amount: 1000, Currency: "RUB"},
+		},
+	}
+
+	// Теперь клиент получает ошибку — заказ НЕ создан, можно повторить
+	order, err := svc.CreateOrder(context.Background(), "user-123", "idem-key-err", items)
+
+	require.Error(t, err) // Теперь ошибка есть!
+	assert.Contains(t, err.Error(), "ошибка создания заказа")
+	assert.Nil(t, order)
+
+	// repo.Create НЕ должен вызываться — всё идёт через orchestrator
+	mockRepo.AssertNotCalled(t, "Create")
+	mockRepo.AssertExpectations(t)
+	mockOrch.AssertExpectations(t)
+}
+
 // TestOrderService_CreateOrder_Idempotency тестирует идемпотентность: повторный запрос с тем же ключом.
 func TestOrderService_CreateOrder_Idempotency(t *testing.T) {
 	mockRepo := new(MockOrderRepository)
@@ -108,7 +176,7 @@ func TestOrderService_CreateOrder_Idempotency(t *testing.T) {
 	mockRepo.On("GetByIdempotencyKey", mock.Anything, "idem-key-123").
 		Return(existingOrder, nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	items := []domain.OrderItem{
 		{
@@ -207,7 +275,7 @@ func TestOrderService_CreateOrder_ValidationError(t *testing.T) {
 			mockRepo.On("GetByIdempotencyKey", mock.Anything, mock.Anything).
 				Return(nil, domain.ErrOrderNotFound).Maybe()
 
-			svc := NewOrderService(mockRepo)
+			svc := NewOrderService(mockRepo, nil)
 
 			order, err := svc.CreateOrder(context.Background(), tt.userID, "", tt.items)
 
@@ -227,7 +295,7 @@ func TestOrderService_CreateOrder_DBError(t *testing.T) {
 	mockRepo.On("Create", mock.Anything, mock.AnythingOfType("*domain.Order")).
 		Return(errors.New("database connection lost"))
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	items := []domain.OrderItem{
 		{
@@ -272,7 +340,7 @@ func TestOrderService_GetOrder(t *testing.T) {
 
 	mockRepo.On("GetByID", mock.Anything, "order-123").Return(expectedOrder, nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	order, err := svc.GetOrder(context.Background(), "order-123")
 
@@ -292,7 +360,7 @@ func TestOrderService_GetOrder_NotFound(t *testing.T) {
 	mockRepo.On("GetByID", mock.Anything, "non-existent-order").
 		Return(nil, domain.ErrOrderNotFound)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	order, err := svc.GetOrder(context.Background(), "non-existent-order")
 
@@ -310,7 +378,7 @@ func TestOrderService_GetOrder_DBError(t *testing.T) {
 	mockRepo.On("GetByID", mock.Anything, "order-123").
 		Return(nil, errors.New("connection refused"))
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	order, err := svc.GetOrder(context.Background(), "order-123")
 
@@ -338,7 +406,7 @@ func TestOrderService_ListOrders(t *testing.T) {
 	mockRepo.On("ListByUserID", mock.Anything, "user-123", (*domain.OrderStatus)(nil), 0, 10).
 		Return(orders, int64(15), nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	result, total, err := svc.ListOrders(context.Background(), "user-123", nil, 1, 10)
 
@@ -361,7 +429,7 @@ func TestOrderService_ListOrders_WithStatusFilter(t *testing.T) {
 	mockRepo.On("ListByUserID", mock.Anything, "user-123", &pendingStatus, 0, 20).
 		Return(orders, int64(1), nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	result, total, err := svc.ListOrders(context.Background(), "user-123", &pendingStatus, 1, 20)
 
@@ -425,7 +493,7 @@ func TestOrderService_ListOrders_Pagination(t *testing.T) {
 			mockRepo.On("ListByUserID", mock.Anything, "user-123", (*domain.OrderStatus)(nil), tt.expectedOffset, tt.expectedLimit).
 				Return([]*domain.Order{}, int64(0), nil)
 
-			svc := NewOrderService(mockRepo)
+			svc := NewOrderService(mockRepo, nil)
 
 			_, _, err := svc.ListOrders(context.Background(), "user-123", nil, tt.page, tt.pageSize)
 
@@ -442,7 +510,7 @@ func TestOrderService_ListOrders_DBError(t *testing.T) {
 	mockRepo.On("ListByUserID", mock.Anything, "user-123", (*domain.OrderStatus)(nil), 0, 20).
 		Return(nil, int64(0), errors.New("database error"))
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	result, total, err := svc.ListOrders(context.Background(), "user-123", nil, 1, 20)
 
@@ -473,7 +541,7 @@ func TestOrderService_CancelOrder(t *testing.T) {
 	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
 		Return(nil)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	err := svc.CancelOrder(context.Background(), "order-123")
 
@@ -488,7 +556,7 @@ func TestOrderService_CancelOrder_NotFound(t *testing.T) {
 	mockRepo.On("GetByID", mock.Anything, "non-existent-order").
 		Return(nil, domain.ErrOrderNotFound)
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	err := svc.CancelOrder(context.Background(), "non-existent-order")
 
@@ -530,7 +598,7 @@ func TestOrderService_CancelOrder_WrongStatus(t *testing.T) {
 
 			mockRepo.On("GetByID", mock.Anything, "order-123").Return(order, nil)
 
-			svc := NewOrderService(mockRepo)
+			svc := NewOrderService(mockRepo, nil)
 
 			err := svc.CancelOrder(context.Background(), "order-123")
 
@@ -557,7 +625,7 @@ func TestOrderService_CancelOrder_DBError(t *testing.T) {
 	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
 		Return(errors.New("database error"))
 
-	svc := NewOrderService(mockRepo)
+	svc := NewOrderService(mockRepo, nil)
 
 	err := svc.CancelOrder(context.Background(), "order-123")
 

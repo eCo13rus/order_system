@@ -12,6 +12,7 @@ import (
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/services/order/internal/domain"
 	"example.com/order-system/services/order/internal/repository"
+	"example.com/order-system/services/order/internal/saga"
 )
 
 // Константы для валидации пагинации.
@@ -42,12 +43,17 @@ type OrderService interface {
 
 // orderService — реализация OrderService.
 type orderService struct {
-	repo repository.OrderRepository
+	repo         repository.OrderRepository
+	orchestrator saga.Orchestrator // Saga Orchestrator для запуска распределённых транзакций
 }
 
 // NewOrderService создаёт новый сервис заказов.
-func NewOrderService(repo repository.OrderRepository) OrderService {
-	return &orderService{repo: repo}
+// orchestrator может быть nil — тогда саги не запускаются (для тестов без саги).
+func NewOrderService(repo repository.OrderRepository, orchestrator saga.Orchestrator) OrderService {
+	return &orderService{
+		repo:         repo,
+		orchestrator: orchestrator,
+	}
 }
 
 // CreateOrder создаёт новый заказ с идемпотентностью.
@@ -106,14 +112,27 @@ func (s *orderService) CreateOrder(ctx context.Context, userID, idempotencyKey s
 	// Пересчитываем итоговую сумму
 	order.CalculateTotal()
 
-	// Сохраняем в БД
-	if err := s.repo.Create(ctx, order); err != nil {
-		log.Error().
-			Err(err).
-			Str("user_id", userID).
-			Str("idempotency_key", idempotencyKey).
-			Msg("Ошибка создания заказа")
-		return nil, fmt.Errorf("ошибка создания заказа: %w", err)
+	// Создаём заказ с сагой АТОМАРНО (если orchestrator настроен)
+	// Это решает проблему dual write — order+saga+outbox в одной транзакции
+	if s.orchestrator != nil {
+		if err := s.orchestrator.CreateOrderWithSaga(ctx, order); err != nil {
+			log.Error().
+				Err(err).
+				Str("user_id", userID).
+				Str("idempotency_key", idempotencyKey).
+				Msg("Ошибка создания заказа с сагой")
+			return nil, fmt.Errorf("ошибка создания заказа: %w", err)
+		}
+	} else {
+		// Без orchestrator — создаём только заказ (для тестов)
+		if err := s.repo.Create(ctx, order); err != nil {
+			log.Error().
+				Err(err).
+				Str("user_id", userID).
+				Str("idempotency_key", idempotencyKey).
+				Msg("Ошибка создания заказа")
+			return nil, fmt.Errorf("ошибка создания заказа: %w", err)
+		}
 	}
 
 	log.Info().

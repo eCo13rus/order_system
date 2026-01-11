@@ -467,3 +467,278 @@ func TestOrchestrator_HandlePaymentReply_FailedWithRefund_NilStepData(t *testing
 	sagaRepo.AssertExpectations(t)
 	orderRepo.AssertExpectations(t)
 }
+
+// =============================================================================
+// Тесты веток ошибок handlePaymentSuccess
+// =============================================================================
+
+// TestOrchestrator_HandlePaymentSuccess_OrderNotFound — ошибка при получении заказа.
+func TestOrchestrator_HandlePaymentSuccess_OrderNotFound(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	reply := &Reply{
+		SagaID:    "saga-123",
+		OrderID:   "order-456",
+		Status:    ReplySuccess,
+		PaymentID: "payment-789",
+		Timestamp: time.Now(),
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(nil, domain.ErrOrderNotFound)
+
+	err := orch.HandlePaymentReply(ctx, reply)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка получения заказа")
+	sagaRepo.AssertExpectations(t)
+	orderRepo.AssertExpectations(t)
+}
+
+// TestOrchestrator_HandlePaymentSuccess_OrderConfirmError — заказ не в статусе PENDING.
+func TestOrchestrator_HandlePaymentSuccess_OrderConfirmError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	// Заказ уже CONFIRMED — Confirm() вернёт ошибку
+	order := &domain.Order{
+		ID:     "order-456",
+		UserID: "user-123",
+		Status: domain.OrderStatusConfirmed,
+	}
+
+	reply := &Reply{
+		SagaID:    "saga-123",
+		OrderID:   "order-456",
+		Status:    ReplySuccess,
+		PaymentID: "payment-789",
+		Timestamp: time.Now(),
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
+
+	err := orch.HandlePaymentReply(ctx, reply)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка подтверждения заказа")
+	sagaRepo.AssertExpectations(t)
+	orderRepo.AssertExpectations(t)
+}
+
+// TestOrchestrator_HandlePaymentSuccess_UpdateError — ошибка при атомарном обновлении.
+func TestOrchestrator_HandlePaymentSuccess_UpdateError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	order := &domain.Order{
+		ID:     "order-456",
+		UserID: "user-123",
+		Status: domain.OrderStatusPending,
+	}
+
+	reply := &Reply{
+		SagaID:    "saga-123",
+		OrderID:   "order-456",
+		Status:    ReplySuccess,
+		PaymentID: "payment-789",
+		Timestamp: time.Now(),
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
+	sagaRepo.On("UpdateWithOrder", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusConfirmed, mock.AnythingOfType("*string"), (*string)(nil)).
+		Return(errors.New("db connection lost"))
+
+	err := orch.HandlePaymentReply(ctx, reply)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка обновления")
+	sagaRepo.AssertExpectations(t)
+	orderRepo.AssertExpectations(t)
+}
+
+// TestOrchestrator_HandlePaymentSuccess_SagaCompleteError — сага уже в терминальном состоянии.
+func TestOrchestrator_HandlePaymentSuccess_SagaCompleteError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	// Сага в COMPLETED — Complete() вернёт ErrSagaCompleted
+	// Но HandlePaymentReply проверяет Status раньше и пропустит
+	// Поэтому тестируем через StatusCompensating — переход в COMPLETED недопустим
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusCompensating, // Нельзя перейти в COMPLETED
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	reply := &Reply{
+		SagaID:    "saga-123",
+		OrderID:   "order-456",
+		Status:    ReplySuccess,
+		PaymentID: "payment-789",
+		Timestamp: time.Now(),
+	}
+
+	// HandlePaymentReply проверит Status != PAYMENT_PENDING и пропустит
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+
+	err := orch.HandlePaymentReply(ctx, reply)
+
+	// Не ошибка — просто пропускаем ответ
+	require.NoError(t, err)
+	// Update не вызывается
+	sagaRepo.AssertNotCalled(t, "UpdateWithOrder")
+}
+
+// =============================================================================
+// Тесты веток ошибок compensateSagaWithRefund
+// =============================================================================
+
+// TestOrchestrator_CompensateSaga_OrderNotFound — заказ не найден при компенсации.
+func TestOrchestrator_CompensateSaga_OrderNotFound(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(nil, domain.ErrOrderNotFound)
+
+	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка получения заказа")
+}
+
+// TestOrchestrator_CompensateSaga_OrderFailError — заказ не в статусе для Fail.
+func TestOrchestrator_CompensateSaga_OrderFailError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	// Заказ уже FAILED — Fail() вернёт ошибку
+	order := &domain.Order{
+		ID:     "order-456",
+		UserID: "user-123",
+		Status: domain.OrderStatusFailed,
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
+
+	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка пометки заказа")
+}
+
+// TestOrchestrator_CompensateSaga_UpdateError — ошибка при атомарном обновлении.
+func TestOrchestrator_CompensateSaga_UpdateError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusPaymentPending,
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	order := &domain.Order{
+		ID:     "order-456",
+		UserID: "user-123",
+		Status: domain.OrderStatusPending,
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).
+		Return(errors.New("db connection lost"))
+
+	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка обновления")
+}
+
+// TestOrchestrator_CompensateSaga_SagaFailError — сага уже в терминальном состоянии.
+func TestOrchestrator_CompensateSaga_SagaFailError(t *testing.T) {
+	ctx := context.Background()
+	sagaRepo := new(MockSagaRepository)
+	orderRepo := new(MockOrderRepository)
+
+	orch := NewOrchestrator(sagaRepo, orderRepo)
+
+	// Сага уже COMPLETED — Fail() вернёт ошибку
+	saga := &Saga{
+		ID:       "saga-123",
+		OrderID:  "order-456",
+		Status:   StatusCompleted, // Терминальное состояние
+		StepData: &StepData{Amount: 10000, Currency: "RUB"},
+	}
+
+	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
+
+	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ошибка перехода состояния")
+	// OrderRepo не должен вызываться
+	orderRepo.AssertNotCalled(t, "GetByID")
+}

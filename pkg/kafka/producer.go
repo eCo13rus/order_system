@@ -40,41 +40,6 @@ func NewProducer(cfg Config) (*Producer, error) {
 	}, nil
 }
 
-// NewAsyncProducer создаёт Producer в асинхронном режиме.
-// Сообщения буферизуются и отправляются пакетами для максимальной производительности.
-// ВНИМАНИЕ: ошибки отправки не возвращаются, только логируются.
-func NewAsyncProducer(cfg Config) (*Producer, error) {
-	if len(cfg.Brokers) == 0 {
-		return nil, fmt.Errorf("не указаны брокеры Kafka")
-	}
-
-	writer := &kafka.Writer{
-		Addr:         kafka.TCP(cfg.Brokers...),
-		Balancer:     &kafka.LeastBytes{},
-		BatchSize:    100,
-		BatchTimeout: 50 * time.Millisecond,
-		RequiredAcks: kafka.RequireOne,
-		Async:        true,
-		Completion: func(messages []kafka.Message, err error) {
-			if err != nil {
-				logger.Error().
-					Err(err).
-					Int("count", len(messages)).
-					Msg("Ошибка асинхронной отправки в Kafka")
-			}
-		},
-	}
-
-	logger.Info().
-		Strs("brokers", cfg.Brokers).
-		Msg("Создан асинхронный Kafka Producer")
-
-	return &Producer{
-		writer: writer,
-		cfg:    cfg,
-	}, nil
-}
-
 // Send отправляет сообщение в указанный топик.
 // Автоматически добавляет headers: trace_id, correlation_id, timestamp.
 // Headers извлекаются из context, если они там есть.

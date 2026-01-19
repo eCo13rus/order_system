@@ -20,7 +20,9 @@ import (
 	"example.com/order-system/pkg/config"
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
+	"example.com/order-system/pkg/metrics"
 	"example.com/order-system/pkg/middleware"
+	"example.com/order-system/pkg/tracing"
 	orderv1 "example.com/order-system/proto/order/v1"
 	ordergrpc "example.com/order-system/services/order/internal/grpc"
 	"example.com/order-system/services/order/internal/repository"
@@ -49,6 +51,30 @@ func main() {
 		Str("env", cfg.App.Env).
 		Int("port", cfg.GRPC.OrderService.Port).
 		Msg("Запуск Order Service")
+
+	// === Observability: Metrics + Tracing ===
+
+	// Запускаем HTTP сервер для Prometheus метрик
+	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		metricsServer = metrics.NewServer(cfg.Metrics.Addr(), "order-service")
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				log.Error().Err(err).Msg("Ошибка Metrics Server")
+			}
+		}()
+	}
+
+	// Инициализируем distributed tracing (Jaeger)
+	shutdownTracing, err := tracing.InitTracer(tracing.Config{
+		ServiceName:    "order-service",
+		JaegerEndpoint: cfg.Jaeger.OTLPEndpoint(),
+		Enabled:        cfg.Jaeger.Enabled,
+	})
+	if err != nil {
+		log.Warn().Err(err).Msg("Не удалось инициализировать tracing")
+	}
 
 	// Подключаемся к MySQL
 	db, err := connectMySQL(cfg.MySQL, cfg.IsDevelopment())
@@ -183,6 +209,22 @@ func main() {
 	if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
 		if err := sqlDB.Close(); err != nil {
 			log.Error().Err(err).Msg("Ошибка закрытия MySQL")
+		}
+	}
+
+	// Останавливаем Metrics Server (если был запущен)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("Ошибка остановки Metrics Server")
+		}
+	}
+
+	// Останавливаем Tracing
+	if shutdownTracing != nil {
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("Ошибка остановки Tracing")
 		}
 	}
 

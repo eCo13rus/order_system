@@ -152,7 +152,7 @@ func EnsureTopics(brokers []string, topics []TopicConfig) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Получаем адрес контроллера кластера
 	controller, err := conn.Controller()
@@ -166,7 +166,7 @@ func EnsureTopics(brokers []string, topics []TopicConfig) error {
 	if err != nil {
 		return err
 	}
-	defer controllerConn.Close()
+	defer func() { _ = controllerConn.Close() }()
 
 	// Формируем список топиков для создания
 	topicConfigs := make([]kafka.TopicConfig, len(topics))

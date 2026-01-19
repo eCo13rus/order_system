@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,9 @@ import (
 
 // mockPaymentRepository — универсальный мок для всех тестов.
 // Поддерживает настраиваемые ошибки и данные для recovery.
+// Потокобезопасен для корректной эмуляции race condition тестов.
 type mockPaymentRepository struct {
+	mu       sync.Mutex // защита от race condition
 	payments map[string]*domain.Payment
 	bySaga   map[string]*domain.Payment
 
@@ -41,42 +44,61 @@ func newMockRepo() *mockPaymentRepository {
 }
 
 func (m *mockPaymentRepository) Create(ctx context.Context, payment *domain.Payment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.createErr != nil {
 		return m.createErr
 	}
-	// Проверяем идемпотентность
+	// Проверяем идемпотентность (эмулирует UNIQUE constraint в БД)
 	if _, exists := m.bySaga[payment.SagaID]; exists {
 		return domain.ErrDuplicatePayment
 	}
 
 	payment.CreatedAt = time.Now()
 	payment.UpdatedAt = time.Now()
-	m.payments[payment.ID] = payment
-	m.bySaga[payment.SagaID] = payment
+
+	// Сохраняем копию — эмулируем INSERT в БД (снапшот данных, не ссылка)
+	paymentCopy := *payment
+	m.payments[payment.ID] = &paymentCopy
+	m.bySaga[payment.SagaID] = &paymentCopy
 	return nil
 }
 
 func (m *mockPaymentRepository) GetByID(ctx context.Context, id string) (*domain.Payment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
 	if p, ok := m.payments[id]; ok {
-		return p, nil
+		// Возвращаем копию, как реальная БД (каждый SELECT = новый объект)
+		copy := *p
+		return &copy, nil
 	}
 	return nil, domain.ErrPaymentNotFound
 }
 
 func (m *mockPaymentRepository) GetBySagaID(ctx context.Context, sagaID string) (*domain.Payment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.getErr != nil {
 		return nil, m.getErr
 	}
 	if p, ok := m.bySaga[sagaID]; ok {
-		return p, nil
+		// Возвращаем копию, как реальная БД (каждый SELECT = новый объект)
+		copy := *p
+		return &copy, nil
 	}
 	return nil, domain.ErrPaymentNotFound
 }
 
 func (m *mockPaymentRepository) Update(ctx context.Context, payment *domain.Payment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.updateErr != nil {
 		return m.updateErr
 	}

@@ -11,13 +11,14 @@ import (
 
 // Config содержит полную конфигурацию приложения.
 type Config struct {
-	App    AppConfig
-	MySQL  MySQLConfig
-	Redis  RedisConfig
-	Kafka  KafkaConfig
-	JWT    JWTConfig
-	Jaeger JaegerConfig
-	GRPC   GRPCConfig
+	App     AppConfig
+	MySQL   MySQLConfig
+	Redis   RedisConfig
+	Kafka   KafkaConfig
+	JWT     JWTConfig
+	Jaeger  JaegerConfig
+	GRPC    GRPCConfig
+	Metrics MetricsConfig
 }
 
 // AppConfig содержит общие настройки приложения.
@@ -69,24 +70,36 @@ type KafkaConfig struct {
 // PrivateKeyPath — только для сервиса, который выдаёт токены (User Service).
 // PublicKeyPath — для всех сервисов, которые валидируют токены.
 type JWTConfig struct {
-	PrivateKeyPath  string        `env:"JWT_PRIVATE_KEY_PATH"`                      // Путь к приватному ключу (PEM)
-	PublicKeyPath   string        `env:"JWT_PUBLIC_KEY_PATH,required"`              // Путь к публичному ключу (PEM)
-	Issuer          string        `env:"JWT_ISSUER" envDefault:"order-system"`      // Издатель токена
-	AccessTokenTTL  time.Duration `env:"JWT_ACCESS_TOKEN_TTL" envDefault:"15m"`     // Время жизни access token
-	RefreshTokenTTL time.Duration `env:"JWT_REFRESH_TOKEN_TTL" envDefault:"168h"`   // Время жизни refresh token (7 дней)
+	PrivateKeyPath  string        `env:"JWT_PRIVATE_KEY_PATH"`                    // Путь к приватному ключу (PEM)
+	PublicKeyPath   string        `env:"JWT_PUBLIC_KEY_PATH,required"`            // Путь к публичному ключу (PEM)
+	Issuer          string        `env:"JWT_ISSUER" envDefault:"order-system"`    // Издатель токена
+	AccessTokenTTL  time.Duration `env:"JWT_ACCESS_TOKEN_TTL" envDefault:"15m"`   // Время жизни access token
+	RefreshTokenTTL time.Duration `env:"JWT_REFRESH_TOKEN_TTL" envDefault:"168h"` // Время жизни refresh token (7 дней)
 }
 
 // JaegerConfig содержит настройки трассировки Jaeger.
 type JaegerConfig struct {
-	Enabled     bool   `env:"JAEGER_ENABLED" envDefault:"true"`
-	Host        string `env:"JAEGER_HOST" envDefault:"localhost"`
-	Port        int    `env:"JAEGER_PORT" envDefault:"6831"`
-	ServiceName string `env:"JAEGER_SERVICE_NAME" envDefault:"order-system"`
+	Enabled  bool   `env:"JAEGER_ENABLED" envDefault:"true"`
+	Host     string `env:"JAEGER_HOST" envDefault:"localhost"`
+	OTLPPort int    `env:"JAEGER_OTLP_PORT" envDefault:"4317"` // OTLP gRPC порт
 }
 
-// Endpoint возвращает адрес Jaeger агента.
-func (c JaegerConfig) Endpoint() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+// OTLPEndpoint возвращает OTLP gRPC endpoint для Jaeger.
+func (c JaegerConfig) OTLPEndpoint() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.OTLPPort)
+}
+
+// MetricsConfig содержит настройки Prometheus метрик.
+// В K8s все сервисы могут использовать один порт (разные pods).
+// Локально — каждый сервис переопределяет METRICS_PORT.
+type MetricsConfig struct {
+	Enabled bool `env:"METRICS_ENABLED" envDefault:"true"` // Включить metrics endpoint
+	Port    int  `env:"METRICS_PORT" envDefault:"9090"`    // Порт для /metrics
+}
+
+// Addr возвращает адрес для Metrics HTTP сервера.
+func (c MetricsConfig) Addr() string {
+	return fmt.Sprintf(":%d", c.Port)
 }
 
 // Load загружает конфигурацию из переменных окружения.

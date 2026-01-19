@@ -1,0 +1,11 @@
+# Автоматическое подключение Prometheus как datasource
+# Grafana загрузит этот файл при старте
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

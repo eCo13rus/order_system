@@ -1,0 +1,123 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Обзор всех микросервисов Order Processing System",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "RPS по сервисам",
+      "description": "rate(requests_total[5m]) — количество запросов в секунду за последние 5 минут",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(requests_total[5m])) by (service)",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Latency p95",
+      "description": "histogram_quantile(0.95, ...) — 95% запросов выполняются быстрее этого времени",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(request_duration_seconds_bucket[5m])) by (le, service))",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Latency p50 / p99",
+      "description": "Сравнение медианы (p50) и хвоста (p99) latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(request_duration_seconds_bucket[5m])) by (le, service))",
+          "legendFormat": "{{service}} p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(request_duration_seconds_bucket[5m])) by (le, service))",
+          "legendFormat": "{{service}} p99",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "title": "Запросы по методам",
+      "description": "Распределение запросов по HTTP endpoints",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(requests_total[5m])) by (method)",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Ошибки (status=error)",
+      "description": "Запросы с кодом >= 400",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(requests_total{status=\"error\"}[5m])) by (service, method)",
+          "legendFormat": "{{service}} {{method}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "tags": ["order-system", "microservices"],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Order System Overview",
+  "uid": "order-system-overview",
+  "version": 2
+}

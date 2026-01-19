@@ -37,11 +37,12 @@ scrape_configs:
           service: 'prometheus'
 
   # ---------------------------------------------------------------------------
-  # API Gateway (Gin HTTP)
+  # API Gateway (Gin HTTP) — metrics :9091
+  # host.docker.internal — доступ с Docker контейнера к хосту
   # ---------------------------------------------------------------------------
   - job_name: 'gateway'
     static_configs:
-      - targets: ['gateway:9090']
+      - targets: ['host.docker.internal:9091']
         labels:
           service: 'gateway'
           type: 'http'
@@ -49,11 +50,11 @@ scrape_configs:
     scrape_interval: 10s
 
   # ---------------------------------------------------------------------------
-  # User Service (gRPC)
+  # User Service (gRPC) — metrics :9097
   # ---------------------------------------------------------------------------
   - job_name: 'user-service'
     static_configs:
-      - targets: ['user-service:9090']
+      - targets: ['host.docker.internal:9097']
         labels:
           service: 'user-service'
           type: 'grpc'
@@ -61,11 +62,11 @@ scrape_configs:
     scrape_interval: 10s
 
   # ---------------------------------------------------------------------------
-  # Order Service (gRPC) - Saga Orchestrator
+  # Order Service (gRPC) - Saga Orchestrator — metrics :9095
   # ---------------------------------------------------------------------------
   - job_name: 'order-service'
     static_configs:
-      - targets: ['order-service:9090']
+      - targets: ['host.docker.internal:9095']
         labels:
           service: 'order-service'
           type: 'grpc'
@@ -74,11 +75,11 @@ scrape_configs:
     scrape_interval: 10s
 
   # ---------------------------------------------------------------------------
-  # Payment Service (gRPC)
+  # Payment Service (gRPC) — metrics :9096
   # ---------------------------------------------------------------------------
   - job_name: 'payment-service'
     static_configs:
-      - targets: ['payment-service:9090']
+      - targets: ['host.docker.internal:9096']
         labels:
           service: 'payment-service'
           type: 'grpc'

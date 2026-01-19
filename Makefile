@@ -112,19 +112,19 @@ migrate-create: ## Создать новую миграцию (make migrate-crea
 	migrate create -ext sql -dir services/$(service)/migrations -seq $(name)
 
 # =============================================================================
-# Services
+# Services (METRICS_PORT задаём уникально, чтобы не конфликтовать с Kafka 9092/9094)
 # =============================================================================
-run-gateway: ## Запуск API Gateway
-	go run ./services/gateway/cmd/main.go
+run-gateway: ## Запуск API Gateway (metrics :9091)
+	METRICS_PORT=9091 go run ./services/gateway/cmd/main.go
 
-run-user: ## Запуск User Service
-	go run ./services/user/cmd/main.go
+run-user: ## Запуск User Service (metrics :9097)
+	METRICS_PORT=9097 go run ./services/user/cmd/main.go
 
-run-order: ## Запуск Order Service
-	go run ./services/order/cmd/main.go
+run-order: ## Запуск Order Service (metrics :9095)
+	METRICS_PORT=9095 go run ./services/order/cmd/main.go
 
-run-payment: ## Запуск Payment Service
-	go run ./services/payment/cmd/main.go
+run-payment: ## Запуск Payment Service (metrics :9096)
+	METRICS_PORT=9096 go run ./services/payment/cmd/main.go
 
 # =============================================================================
 # Cleanup

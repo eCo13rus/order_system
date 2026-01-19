@@ -91,6 +91,9 @@ services:
       - prometheus_data:/prometheus
     networks:
       - order-system-network
+    # Linux: host.docker.internal не работает по умолчанию — добавляем явно
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -115,12 +118,14 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_HTTP_PORT=3000
-      # Provisioning
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
     ports:
       - "3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
+      # Provisioning — автоматическая настройка datasources и dashboards
+      - ../grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - order-system-network
     depends_on:

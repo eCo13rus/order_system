@@ -11,12 +11,14 @@ import (
 
 // Config содержит полную конфигурацию API Gateway.
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Redis    RedisConfig
-	JWT      JWTConfig
-	GRPC     GRPCClientsConfig
+	App       AppConfig
+	HTTP      HTTPConfig
+	Redis     RedisConfig
+	JWT       JWTConfig
+	GRPC      GRPCClientsConfig
 	RateLimit RateLimitConfig
+	Jaeger    JaegerConfig
+	Metrics   MetricsConfig
 }
 
 // AppConfig — общие настройки приложения.
@@ -73,6 +75,29 @@ type RateLimitConfig struct {
 	Enabled       bool          `env:"RATE_LIMIT_ENABLED" envDefault:"true"`
 	RequestsLimit int           `env:"RATE_LIMIT_REQUESTS" envDefault:"100"` // Количество запросов
 	Window        time.Duration `env:"RATE_LIMIT_WINDOW" envDefault:"1m"`    // Временное окно
+}
+
+// JaegerConfig — настройки трассировки Jaeger.
+type JaegerConfig struct {
+	Enabled  bool   `env:"JAEGER_ENABLED" envDefault:"true"`
+	Host     string `env:"JAEGER_HOST" envDefault:"localhost"`
+	OTLPPort int    `env:"JAEGER_OTLP_PORT" envDefault:"4317"`
+}
+
+// OTLPEndpoint возвращает OTLP gRPC endpoint для Jaeger.
+func (c JaegerConfig) OTLPEndpoint() string {
+	return fmt.Sprintf("%s:%d", c.Host, c.OTLPPort)
+}
+
+// MetricsConfig — настройки Prometheus метрик.
+type MetricsConfig struct {
+	Enabled bool `env:"METRICS_ENABLED" envDefault:"true"` // Включить metrics endpoint
+	Port    int  `env:"METRICS_PORT" envDefault:"9090"`    // Порт для /metrics
+}
+
+// Addr возвращает адрес для Metrics HTTP сервера.
+func (c MetricsConfig) Addr() string {
+	return fmt.Sprintf(":%d", c.Port)
 }
 
 // Load загружает конфигурацию из переменных окружения.

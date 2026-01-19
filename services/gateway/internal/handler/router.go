@@ -3,7 +3,9 @@ package handler
 
 import (
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
+	"example.com/order-system/pkg/metrics"
 	"example.com/order-system/services/gateway/internal/client"
 	"example.com/order-system/services/gateway/internal/middleware"
 )
@@ -40,6 +42,12 @@ func NewRouter(cfg RouterConfig) *Router {
 
 	// Стандартные middleware Gin
 	engine.Use(gin.Recovery())
+
+	// OpenTelemetry tracing — создаёт spans для Jaeger
+	engine.Use(otelgin.Middleware("gateway"))
+
+	// Prometheus метрики — requests_total, request_duration_seconds
+	engine.Use(metrics.GinMetricsMiddleware("gateway"))
 
 	r := &Router{
 		engine:      engine,

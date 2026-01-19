@@ -14,6 +14,8 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"example.com/order-system/pkg/logger"
+	"example.com/order-system/pkg/metrics"
+	"example.com/order-system/pkg/tracing"
 	"example.com/order-system/services/gateway/internal/client"
 	"example.com/order-system/services/gateway/internal/config"
 	"example.com/order-system/services/gateway/internal/handler"
@@ -37,6 +39,30 @@ func main() {
 		Str("service", cfg.App.Name).
 		Str("env", cfg.App.Env).
 		Msg("Запуск API Gateway")
+
+	// === Observability: Metrics + Tracing ===
+
+	// Запускаем HTTP сервер для Prometheus метрик
+	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		metricsServer = metrics.NewServer(cfg.Metrics.Addr(), "gateway")
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				logger.Error().Err(err).Msg("Ошибка Metrics Server")
+			}
+		}()
+	}
+
+	// Инициализируем distributed tracing (Jaeger)
+	shutdownTracing, err := tracing.InitTracer(tracing.Config{
+		ServiceName:    "gateway",
+		JaegerEndpoint: cfg.Jaeger.OTLPEndpoint(),
+		Enabled:        cfg.Jaeger.Enabled,
+	})
+	if err != nil {
+		logger.Warn().Err(err).Msg("Не удалось инициализировать tracing")
+	}
 
 	// === Инициализация зависимостей ===
 
@@ -157,6 +183,20 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("Ошибка при остановке сервера")
+	}
+
+	// Останавливаем Metrics Server (если был запущен)
+	if metricsServer != nil {
+		if err := metricsServer.Shutdown(ctx); err != nil {
+			logger.Error().Err(err).Msg("Ошибка остановки Metrics Server")
+		}
+	}
+
+	// Останавливаем Tracing
+	if shutdownTracing != nil {
+		if err := shutdownTracing(ctx); err != nil {
+			logger.Error().Err(err).Msg("Ошибка остановки Tracing")
+		}
 	}
 
 	logger.Info().Msg("API Gateway остановлен")

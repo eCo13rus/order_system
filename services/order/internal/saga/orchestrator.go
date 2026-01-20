@@ -28,11 +28,6 @@ type Orchestrator interface {
 	// Если любая часть падает — откатывается ВСЁ, клиент получает ошибку.
 	CreateOrderWithSaga(ctx context.Context, order *domain.Order) error
 
-	// StartSaga инициирует сагу для существующего заказа.
-	// DEPRECATED: используй CreateOrderWithSaga для новых заказов.
-	// Оставлен для обратной совместимости и recovery job.
-	StartSaga(ctx context.Context, order *domain.Order) error
-
 	// HandlePaymentReply обрабатывает ответ от Payment Service.
 	// При успехе — подтверждает заказ, при ошибке — запускает компенсацию.
 	HandlePaymentReply(ctx context.Context, reply *Reply) error
@@ -121,72 +116,6 @@ func (o *orchestrator) CreateOrderWithSaga(ctx context.Context, order *domain.Or
 		Int64("amount", order.TotalAmount.Amount).
 		Str("currency", order.TotalAmount.Currency).
 		Msg("Заказ и сага созданы атомарно")
-
-	return nil
-}
-
-// StartSaga инициирует сагу для существующего заказа.
-// DEPRECATED: используй CreateOrderWithSaga для новых заказов.
-// Оставлен для recovery job (заказы без саги).
-func (o *orchestrator) StartSaga(ctx context.Context, order *domain.Order) error {
-	log := logger.FromContext(ctx)
-
-	// Генерируем ID для саги и записи outbox
-	sagaID := uuid.New().String()
-	outboxID := uuid.New().String()
-	now := time.Now()
-
-	// Создаём сагу СРАЗУ в состоянии PAYMENT_PENDING
-	// Это избегает race condition: если транзакция прошла — сага готова принять ответ
-	saga := &Saga{
-		ID:      sagaID,
-		OrderID: order.ID,
-		Status:  StatusPaymentPending, // Сразу в PAYMENT_PENDING!
-		StepData: &StepData{
-			Amount:   order.TotalAmount.Amount,
-			Currency: order.TotalAmount.Currency,
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	// Формируем команду ProcessPayment
-	cmd := &Command{
-		SagaID:    sagaID,
-		OrderID:   order.ID,
-		UserID:    order.UserID,
-		Type:      CommandProcessPayment,
-		Amount:    order.TotalAmount.Amount,
-		Currency:  order.TotalAmount.Currency,
-		Timestamp: now,
-	}
-
-	// Собираем headers для трассировки
-	headers := map[string]string{
-		kafka.HeaderTraceID:       kafka.TraceIDFromContext(ctx),
-		kafka.HeaderCorrelationID: kafka.CorrelationIDFromContext(ctx),
-	}
-
-	// Создаём запись outbox
-	outbox, err := NewOutbox(outboxID, order.ID, kafka.TopicSagaCommands, cmd, headers)
-	if err != nil {
-		log.Error().Err(err).Str("order_id", order.ID).Msg("Ошибка создания outbox записи")
-		return fmt.Errorf("ошибка создания outbox: %w", err)
-	}
-
-	// Атомарно создаём сагу в PAYMENT_PENDING и outbox запись
-	// Одна транзакция = консистентность данных
-	if err := o.sagaRepo.CreateWithOutbox(ctx, saga, outbox); err != nil {
-		log.Error().Err(err).Str("order_id", order.ID).Msg("Ошибка создания саги")
-		return fmt.Errorf("ошибка создания саги: %w", err)
-	}
-
-	log.Info().
-		Str("saga_id", sagaID).
-		Str("order_id", order.ID).
-		Int64("amount", order.TotalAmount.Amount).
-		Str("currency", order.TotalAmount.Currency).
-		Msg("Сага запущена, команда ProcessPayment добавлена в outbox")
 
 	return nil
 }

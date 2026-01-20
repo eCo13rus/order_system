@@ -35,10 +35,6 @@ func (m *MockOrchestrator) CreateOrderWithSaga(ctx context.Context, order *domai
 	return m.Called(ctx, order).Error(0)
 }
 
-func (m *MockOrchestrator) StartSaga(ctx context.Context, order *domain.Order) error {
-	return m.Called(ctx, order).Error(0)
-}
-
 func (m *MockOrchestrator) HandlePaymentReply(ctx context.Context, reply *saga.Reply) error {
 	return m.Called(ctx, reply).Error(0)
 }

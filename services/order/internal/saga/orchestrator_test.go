@@ -78,66 +78,6 @@ func TestOrchestrator_CreateOrderWithSaga_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "ошибка создания заказа")
 }
 
-func TestOrchestrator_StartSaga_Success(t *testing.T) {
-	ctx := context.Background()
-	sagaRepo := new(MockSagaRepository)
-	orderRepo := new(MockOrderRepository)
-
-	orch := NewOrchestrator(sagaRepo, orderRepo)
-
-	order := &domain.Order{
-		ID:     "order-123",
-		UserID: "user-456",
-		TotalAmount: domain.Money{
-			Amount:   10000,
-			Currency: "RUB",
-		},
-		Status:    domain.OrderStatusPending,
-		CreatedAt: time.Now(),
-	}
-
-	// Ожидаем ОДИН вызов CreateWithOutbox (сага создаётся сразу в PAYMENT_PENDING)
-	// Update больше не вызывается — это исправление race condition
-	sagaRepo.On("CreateWithOutbox", ctx, mock.AnythingOfType("*saga.Saga"), mock.AnythingOfType("*saga.Outbox")).
-		Run(func(args mock.Arguments) {
-			// Проверяем, что сага создаётся сразу в PAYMENT_PENDING
-			saga := args.Get(1).(*Saga)
-			assert.Equal(t, StatusPaymentPending, saga.Status, "Сага должна создаваться сразу в PAYMENT_PENDING")
-			assert.Equal(t, "order-123", saga.OrderID)
-			assert.Equal(t, int64(10000), saga.StepData.Amount)
-			assert.Equal(t, "RUB", saga.StepData.Currency)
-		}).
-		Return(nil)
-
-	err := orch.StartSaga(ctx, order)
-
-	require.NoError(t, err)
-	sagaRepo.AssertExpectations(t)
-	// Проверяем, что Update НЕ вызывался
-	sagaRepo.AssertNotCalled(t, "Update")
-}
-
-func TestOrchestrator_StartSaga_CreateError(t *testing.T) {
-	ctx := context.Background()
-	sagaRepo := new(MockSagaRepository)
-	orderRepo := new(MockOrderRepository)
-
-	orch := NewOrchestrator(sagaRepo, orderRepo)
-
-	order := &domain.Order{
-		ID:          "order-123",
-		TotalAmount: domain.Money{Amount: 10000, Currency: "RUB"},
-	}
-
-	// Ошибка при создании
-	sagaRepo.On("CreateWithOutbox", ctx, mock.Anything, mock.Anything).Return(errors.New("db error"))
-
-	err := orch.StartSaga(ctx, order)
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ошибка создания саги")
-}
-
 func TestOrchestrator_HandlePaymentReply_Success(t *testing.T) {
 	ctx := context.Background()
 	sagaRepo := new(MockSagaRepository)

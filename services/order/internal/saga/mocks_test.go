@@ -136,11 +136,6 @@ func (m *MockOrchestrator) CreateOrderWithSaga(ctx context.Context, order *domai
 	return args.Error(0)
 }
 
-func (m *MockOrchestrator) StartSaga(ctx context.Context, order *domain.Order) error {
-	args := m.Called(ctx, order)
-	return args.Error(0)
-}
-
 func (m *MockOrchestrator) HandlePaymentReply(ctx context.Context, reply *Reply) error {
 	args := m.Called(ctx, reply)
 	return args.Error(0)

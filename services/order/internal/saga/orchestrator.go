@@ -88,6 +88,7 @@ func (o *orchestrator) CreateOrderWithSaga(ctx context.Context, order *domain.Or
 	cmd := &Command{
 		SagaID:    sagaID,
 		OrderID:   order.ID,
+		UserID:    order.UserID,
 		Type:      CommandProcessPayment,
 		Amount:    order.TotalAmount.Amount,
 		Currency:  order.TotalAmount.Currency,
@@ -153,6 +154,7 @@ func (o *orchestrator) StartSaga(ctx context.Context, order *domain.Order) error
 	cmd := &Command{
 		SagaID:    sagaID,
 		OrderID:   order.ID,
+		UserID:    order.UserID,
 		Type:      CommandProcessPayment,
 		Amount:    order.TotalAmount.Amount,
 		Currency:  order.TotalAmount.Currency,

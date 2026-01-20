@@ -172,6 +172,7 @@ const (
 type Command struct {
 	SagaID    string      `json:"saga_id"`   // ID саги для корреляции ответа
 	OrderID   string      `json:"order_id"`  // ID заказа
+	UserID    string      `json:"user_id"`   // ID пользователя
 	Type      CommandType `json:"type"`      // Тип команды
 	Amount    int64       `json:"amount"`    // Сумма в минимальных единицах
 	Currency  string      `json:"currency"`  // Валюта

@@ -16,6 +16,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"example.com/order-system/pkg/config"
+	"example.com/order-system/pkg/healthcheck"
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/metrics"
@@ -47,19 +48,7 @@ func main() {
 		Int("port", cfg.GRPC.PaymentService.Port).
 		Msg("Запуск Payment Service")
 
-	// === Observability: Metrics + Tracing ===
-
-	// Запускаем HTTP сервер для Prometheus метрик
-	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
-	var metricsServer *metrics.Server
-	if cfg.Metrics.Enabled {
-		metricsServer = metrics.NewServer(cfg.Metrics.Addr(), "payment-service")
-		go func() {
-			if err := metricsServer.Start(); err != nil {
-				log.Error().Err(err).Msg("Ошибка Metrics Server")
-			}
-		}()
-	}
+	// === Observability: Tracing ===
 
 	// Инициализируем distributed tracing (Jaeger)
 	shutdownTracing, err := tracing.InitTracer(tracing.Config{
@@ -70,6 +59,8 @@ func main() {
 	if err != nil {
 		log.Warn().Err(err).Msg("Не удалось инициализировать tracing")
 	}
+
+	// === Подключение к зависимостям ===
 
 	// Подключаемся к MySQL
 	db, err := connectMySQL(cfg.MySQL, cfg.IsDevelopment())
@@ -94,6 +85,32 @@ func main() {
 	}
 	cancel()
 	log.Info().Msg("Подключение к Redis установлено")
+
+	// ReadinessChecker для /readyz — проверяет MySQL и Redis
+	readinessCheck := healthcheck.Composite(
+		func(ctx context.Context) error { return healthcheck.CheckMySQL(ctx, db) },
+		func(ctx context.Context) error { return healthcheck.CheckRedis(ctx, rdb) },
+	)
+
+	// === Observability: Metrics ===
+
+	// Запускаем HTTP сервер для Prometheus метрик
+	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		metricsServer = metrics.NewServer(
+			cfg.Metrics.Addr(),
+			"payment-service",
+			metrics.WithReadinessCheck(readinessCheck),
+		)
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				log.Error().Err(err).Msg("Ошибка Metrics Server")
+			}
+		}()
+	}
+
+	// === Инициализация бизнес-логики ===
 
 	// Создаём слои приложения (Clean Architecture)
 	paymentRepo := repository.NewPaymentRepository(db)

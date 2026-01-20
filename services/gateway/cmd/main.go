@@ -13,6 +13,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"example.com/order-system/pkg/circuitbreaker"
+	"example.com/order-system/pkg/healthcheck"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/metrics"
 	"example.com/order-system/pkg/tracing"
@@ -40,19 +42,7 @@ func main() {
 		Str("env", cfg.App.Env).
 		Msg("Запуск API Gateway")
 
-	// === Observability: Metrics + Tracing ===
-
-	// Запускаем HTTP сервер для Prometheus метрик
-	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
-	var metricsServer *metrics.Server
-	if cfg.Metrics.Enabled {
-		metricsServer = metrics.NewServer(cfg.Metrics.Addr(), "gateway")
-		go func() {
-			if err := metricsServer.Start(); err != nil {
-				logger.Error().Err(err).Msg("Ошибка Metrics Server")
-			}
-		}()
-	}
+	// === Observability: Tracing ===
 
 	// Инициализируем distributed tracing (Jaeger)
 	shutdownTracing, err := tracing.InitTracer(tracing.Config{
@@ -64,7 +54,7 @@ func main() {
 		logger.Warn().Err(err).Msg("Не удалось инициализировать tracing")
 	}
 
-	// === Инициализация зависимостей ===
+	// === Подключение к зависимостям ===
 
 	// Redis клиент
 	redisClient := redis.NewClient(&redis.Options{
@@ -87,10 +77,18 @@ func main() {
 	cancel()
 	logger.Info().Str("addr", cfg.Redis.Addr()).Msg("Подключено к Redis")
 
-	// gRPC клиент к User Service
+	// === Circuit Breakers для защиты от каскадных сбоев ===
+	// Каждый сервис получает свой breaker для независимого отслеживания состояния.
+	userBreaker := circuitbreaker.New("user-service")
+	orderBreaker := circuitbreaker.New("order-service")
+
+	logger.Info().Msg("Circuit Breakers инициализированы")
+
+	// gRPC клиент к User Service (с Circuit Breaker)
 	userClient, err := client.NewUserClient(client.UserClientConfig{
-		Addr:    cfg.GRPC.UserServiceAddr,
-		Timeout: 10 * time.Second,
+		Addr:           cfg.GRPC.UserServiceAddr,
+		Timeout:        10 * time.Second,
+		CircuitBreaker: userBreaker,
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Ошибка подключения к User Service")
@@ -101,10 +99,11 @@ func main() {
 		}
 	}()
 
-	// gRPC клиент к Order Service
+	// gRPC клиент к Order Service (с Circuit Breaker)
 	orderClient, err := client.NewOrderClient(client.OrderClientConfig{
-		Addr:    cfg.GRPC.OrderServiceAddr,
-		Timeout: 10 * time.Second,
+		Addr:           cfg.GRPC.OrderServiceAddr,
+		Timeout:        10 * time.Second,
+		CircuitBreaker: orderBreaker,
 	})
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Ошибка подключения к Order Service")
@@ -114,6 +113,30 @@ func main() {
 			logger.Error().Err(err).Msg("Ошибка закрытия Order Service клиента")
 		}
 	}()
+
+	// ReadinessChecker для /readyz — проверяет Redis
+	// gRPC клиенты проверяются неявно через timeout при первом запросе
+	readinessCheck := func(ctx context.Context) error {
+		return healthcheck.CheckRedis(ctx, redisClient)
+	}
+
+	// === Observability: Metrics ===
+
+	// Запускаем HTTP сервер для Prometheus метрик
+	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
+	var metricsServer *metrics.Server
+	if cfg.Metrics.Enabled {
+		metricsServer = metrics.NewServer(
+			cfg.Metrics.Addr(),
+			"gateway",
+			metrics.WithReadinessCheck(readinessCheck),
+		)
+		go func() {
+			if err := metricsServer.Start(); err != nil {
+				logger.Error().Err(err).Msg("Ошибка Metrics Server")
+			}
+		}()
+	}
 
 	// === Инициализация middleware ===
 
@@ -140,12 +163,13 @@ func main() {
 	// === Настройка роутера ===
 
 	router := handler.NewRouter(handler.RouterConfig{
-		UserClient:  userClient,
-		OrderClient: orderClient,
-		AuthMW:      authMW,
-		RateLimitMW: rateLimitMW,
-		TracingMW:   tracingMW,
-		Debug:       cfg.IsDevelopment(),
+		UserClient:     userClient,
+		OrderClient:    orderClient,
+		AuthMW:         authMW,
+		RateLimitMW:    rateLimitMW,
+		TracingMW:      tracingMW,
+		ReadinessCheck: readinessCheck,
+		Debug:          cfg.IsDevelopment(),
 	})
 
 	// === HTTP сервер ===

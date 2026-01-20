@@ -58,36 +58,97 @@ var (
 // HTTP Server для /metrics endpoint
 // =============================================================================
 
+// ReadinessChecker — функция проверки готовности сервиса.
+// Возвращает nil если сервис готов принимать трафик, иначе — ошибку.
+type ReadinessChecker func(ctx context.Context) error
+
 // Server — HTTP сервер для экспорта метрик Prometheus.
 type Server struct {
-	httpServer *http.Server
-	service    string
+	httpServer     *http.Server
+	service        string
+	readinessCheck ReadinessChecker // опциональная проверка готовности для /readyz
+}
+
+// Option — функциональная опция для настройки Server.
+type Option func(*Server)
+
+// WithReadinessCheck добавляет проверку готовности для /readyz endpoint.
+// Если checker возвращает ошибку — /readyz вернёт 503 Service Unavailable.
+func WithReadinessCheck(checker ReadinessChecker) Option {
+	return func(s *Server) {
+		s.readinessCheck = checker
+	}
 }
 
 // NewServer создаёт новый metrics server.
 // addr — адрес для прослушивания (например ":9090")
 // service — имя сервиса для логирования
-func NewServer(addr, service string) *Server {
+// opts — опциональные настройки (например WithReadinessCheck)
+func NewServer(addr, service string, opts ...Option) *Server {
+	s := &Server{
+		service: service,
+	}
+
+	// Применяем опции
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	mux := http.NewServeMux()
 
 	// /metrics — endpoint для Prometheus (он сам приходит сюда и забирает метрики)
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// /health — простой health check (полезно для отладки)
+	// /health — простой health check (полезно для отладки, оставляем для совместимости)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
 
-	return &Server{
-		httpServer: &http.Server{
-			Addr:         addr,
-			Handler:      mux,
-			ReadTimeout:  5 * time.Second,
-			WriteTimeout: 10 * time.Second,
-		},
-		service: service,
+	// /healthz — liveness probe для Kubernetes
+	// Возвращает 200 OK если процесс жив (сервер отвечает = процесс работает)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"alive"}`))
+	})
+
+	// /readyz — readiness probe для Kubernetes
+	// Возвращает 200 OK если сервис готов принимать трафик (все зависимости доступны)
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		// Если ReadinessChecker не установлен — считаем сервис готовым
+		if s.readinessCheck == nil {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ready"}`))
+			return
+		}
+
+		// Проверяем готовность с таймаутом 5 секунд
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+
+		if err := s.readinessCheck(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			// Не выводим детали ошибки наружу (безопасность)
+			_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+			logger.Warn().Err(err).Str("service", service).Msg("Readiness check failed")
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	})
+
+	s.httpServer = &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
+
+	return s
 }
 
 // Start запускает HTTP сервер для метрик.

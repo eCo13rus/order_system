@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"example.com/order-system/pkg/circuitbreaker"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/middleware"
 	commonv1 "example.com/order-system/proto/common/v1"
@@ -25,8 +26,9 @@ type OrderClient struct {
 
 // OrderClientConfig — конфигурация клиента.
 type OrderClientConfig struct {
-	Addr    string        // Адрес Order Service (host:port)
-	Timeout time.Duration // Таймаут подключения
+	Addr           string                  // Адрес Order Service (host:port)
+	Timeout        time.Duration           // Таймаут подключения
+	CircuitBreaker *circuitbreaker.Breaker // Circuit Breaker (опционально)
 }
 
 // NewOrderClient создаёт новый gRPC клиент к Order Service.
@@ -35,10 +37,20 @@ func NewOrderClient(cfg OrderClientConfig) (*OrderClient, error) {
 		cfg.Timeout = 5 * time.Second
 	}
 
-	// Создаём соединение через grpc.NewClient (современный API).
-	conn, err := grpc.NewClient(cfg.Addr,
+	// gRPC опции.
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	}
+
+	// Добавляем Circuit Breaker interceptor если задан.
+	if cfg.CircuitBreaker != nil {
+		opts = append(opts, grpc.WithUnaryInterceptor(
+			circuitbreaker.UnaryClientInterceptor(cfg.CircuitBreaker),
+		))
+	}
+
+	// Создаём соединение через grpc.NewClient (современный API).
+	conn, err := grpc.NewClient(cfg.Addr, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("ошибка создания gRPC клиента (%s): %w", cfg.Addr, err)
 	}

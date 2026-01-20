@@ -6,10 +6,11 @@ import (
 	"context"
 	"runtime/debug"
 
-	"example.com/order-system/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"example.com/order-system/pkg/logger"
 )
 
 // RecoveryUnaryInterceptor создает interceptor для обработки паник в unary RPC.

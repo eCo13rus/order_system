@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/order-system/pkg/logger"
 	"github.com/segmentio/kafka-go"
+
+	"example.com/order-system/pkg/logger"
 )
 
 // MessageHandler - функция обработки сообщений.
@@ -44,10 +45,10 @@ func NewConsumer(cfg Config, topic string, groupID string) (*Consumer, error) {
 		Brokers:        cfg.Brokers,
 		Topic:          topic,
 		GroupID:        groupID,
-		MinBytes:       1,              // Минимум 1 байт для быстрой обработки
-		MaxBytes:       10e6,           // 10MB максимум
+		MinBytes:       1,    // Минимум 1 байт для быстрой обработки
+		MaxBytes:       10e6, // 10MB максимум
 		MaxWait:        100 * time.Millisecond,
-		CommitInterval: time.Second,    // Автокоммит каждую секунду
+		CommitInterval: time.Second, // Автокоммит каждую секунду
 		StartOffset:    kafka.LastOffset,
 	})
 

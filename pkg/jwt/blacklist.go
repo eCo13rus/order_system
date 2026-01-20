@@ -12,8 +12,8 @@ import (
 
 // Префиксы ключей Redis
 const (
-	prefixToken = "jwt:blacklist:"    // jwt:blacklist:{jti}
-	prefixUser  = "jwt:invalidated:"  // jwt:invalidated:{userID}
+	prefixToken = "jwt:blacklist:"   // jwt:blacklist:{jti}
+	prefixUser  = "jwt:invalidated:" // jwt:invalidated:{userID}
 )
 
 // Blacklist управляет отозванными токенами в Redis.

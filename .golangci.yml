@@ -1,0 +1,130 @@
+# =============================================================================
+# golangci-lint v2 configuration — Order Processing System
+# =============================================================================
+# Документация: https://golangci-lint.run/usage/configuration/
+# =============================================================================
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+
+output:
+  formats:
+    text:
+      path: stdout
+      colors: true
+  sort-results: true
+
+# =============================================================================
+# Линтеры
+# =============================================================================
+linters:
+  # Начинаем с none, добавляем нужные
+  default: none
+  enable:
+    # === Баги и ошибки ===
+    - errcheck        # Проверка обработки ошибок
+    - gosec           # Безопасность (SQL injection, etc.)
+    - staticcheck     # Статический анализ
+    - govet           # go vet
+    - ineffassign     # Неиспользуемые присваивания
+    - unused          # Неиспользуемый код
+
+    # === Сложность и структура ===
+    - gocyclo         # Цикломатическая сложность
+    - dupl            # Дублирование кода
+    - goconst         # Повторяющиеся строки -> константы
+    - unconvert       # Лишние преобразования типов
+    - misspell        # Опечатки
+
+    # === Производительность ===
+    - prealloc        # Предварительное выделение slice
+    - bodyclose       # Закрытие HTTP response body
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false  # Не ругаться на _ = funcCall()
+
+    gocyclo:
+      min-complexity: 15
+
+    dupl:
+      threshold: 100
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    gosec:
+      excludes:
+        - G104  # unhandled errors (errcheck покрывает)
+        - G115  # integer overflow — слишком педантично для int -> int32
+        - G304  # File path from variable
+
+    prealloc:
+      simple: true
+      for-loops: true
+
+  exclusions:
+    # Сгенерированные файлы
+    generated: strict
+
+    # Правила исключений
+    rules:
+      # Тесты — разрешаем больше
+      - path: '_test\.go'
+        linters:
+          - dupl
+          - gosec
+          - errcheck
+          - goconst
+          - prealloc
+
+      # main.go — сложность допустима (инициализация)
+      - path: 'cmd/main\.go$'
+        linters:
+          - gocyclo
+
+      # JWT blacklist — константа не credentials
+      - path: 'pkg/jwt/blacklist\.go$'
+        text: "G101"
+        linters:
+          - gosec
+
+      # Protobuf — игнорируем полностью
+      - path: '\.pb\.go$'
+        linters:
+          - all
+
+      # Mock файлы
+      - path: 'mock_.*\.go$'
+        linters:
+          - all
+
+      # testutil — это тестовые хелперы
+      - path: 'testutil/'
+        linters:
+          - errcheck
+
+      # gRPC клиенты — известное дублирование (решено оставить как есть)
+      - path: 'gateway/internal/client/'
+        linters:
+          - dupl
+
+# =============================================================================
+# Форматеры (отдельно от линтеров в v2)
+# =============================================================================
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - example.com/order-system

@@ -7,9 +7,10 @@ import (
 	"path"
 	"time"
 
-	"example.com/order-system/pkg/logger"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
+
+	"example.com/order-system/pkg/logger"
 )
 
 // LoggingUnaryInterceptor создает interceptor для логирования unary RPC.

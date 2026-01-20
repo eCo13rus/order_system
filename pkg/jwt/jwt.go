@@ -19,8 +19,8 @@ import (
 // Claims содержит данные JWT токена.
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID string `json:"user_id"`          // ID пользователя
-	Role   string `json:"role,omitempty"`   // Роль пользователя (опционально)
+	UserID string `json:"user_id"`        // ID пользователя
+	Role   string `json:"role,omitempty"` // Роль пользователя (опционально)
 }
 
 // TokenPair содержит пару access и refresh токенов.

@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/order-system/pkg/logger"
 	"github.com/segmentio/kafka-go"
+
+	"example.com/order-system/pkg/logger"
 )
 
 // Producer отправляет сообщения в Kafka с поддержкой headers и трассировки.

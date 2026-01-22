@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-system-config
+  namespace: order-system
+data:
+  # App
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  LOG_PRETTY: "false"
+
+  # MySQL/Redis — IP хоста (MySQL и Redis установлены локально)
+  MYSQL_HOST: "192.168.1.114"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "eco"
+  MYSQL_DATABASE: "order_system"
+  REDIS_HOST: "192.168.1.114"
+  REDIS_PORT: "6379"
+
+  # Kafka
+  KAFKA_BROKERS: "192.168.1.114:9094"
+
+  # Jaeger
+  JAEGER_ENABLED: "true"
+  JAEGER_HOST: "192.168.1.114"
+  JAEGER_OTLP_PORT: "4317"
+
+  # gRPC адреса сервисов (K8s DNS)
+  USER_SERVICE_HOST: "user-service"
+  USER_SERVICE_PORT: "50051"
+  ORDER_SERVICE_HOST: "order-service"
+  ORDER_SERVICE_PORT: "50052"
+  PAYMENT_SERVICE_HOST: "payment-service"
+  PAYMENT_SERVICE_PORT: "50053"
+
+  # JWT
+  JWT_PUBLIC_KEY_PATH: "/secrets/jwt/public.pem"
+  JWT_PRIVATE_KEY_PATH: "/secrets/jwt/private.pem"
+
+  # Metrics
+  METRICS_ENABLED: "true"
+  METRICS_PORT: "9090"

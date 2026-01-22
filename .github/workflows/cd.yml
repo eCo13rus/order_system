@@ -1,0 +1,108 @@
+# =============================================================================
+# CD Pipeline — Build, Push, Deploy to k3s
+# =============================================================================
+# Триггер: push в master (после CI)
+# Runner: self-hosted (локальный k3s)
+# =============================================================================
+
+name: CD
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/order-system
+
+jobs:
+  build-and-push:
+    name: Build & Push Images
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Set image tag
+        id: meta
+        run: echo "version=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build & Push Gateway
+        run: |
+          docker build --build-arg SERVICE=gateway -t ${{ env.IMAGE_PREFIX }}/gateway:${{ steps.meta.outputs.version }} -t ${{ env.IMAGE_PREFIX }}/gateway:latest .
+          docker push ${{ env.IMAGE_PREFIX }}/gateway:${{ steps.meta.outputs.version }}
+          docker push ${{ env.IMAGE_PREFIX }}/gateway:latest
+
+      - name: Build & Push User Service
+        run: |
+          docker build --build-arg SERVICE=user -t ${{ env.IMAGE_PREFIX }}/user:${{ steps.meta.outputs.version }} -t ${{ env.IMAGE_PREFIX }}/user:latest .
+          docker push ${{ env.IMAGE_PREFIX }}/user:${{ steps.meta.outputs.version }}
+          docker push ${{ env.IMAGE_PREFIX }}/user:latest
+
+      - name: Build & Push Order Service
+        run: |
+          docker build --build-arg SERVICE=order -t ${{ env.IMAGE_PREFIX }}/order:${{ steps.meta.outputs.version }} -t ${{ env.IMAGE_PREFIX }}/order:latest .
+          docker push ${{ env.IMAGE_PREFIX }}/order:${{ steps.meta.outputs.version }}
+          docker push ${{ env.IMAGE_PREFIX }}/order:latest
+
+      - name: Build & Push Payment Service
+        run: |
+          docker build --build-arg SERVICE=payment -t ${{ env.IMAGE_PREFIX }}/payment:${{ steps.meta.outputs.version }} -t ${{ env.IMAGE_PREFIX }}/payment:latest .
+          docker push ${{ env.IMAGE_PREFIX }}/payment:${{ steps.meta.outputs.version }}
+          docker push ${{ env.IMAGE_PREFIX }}/payment:latest
+
+  deploy:
+    name: Deploy to k3s
+    runs-on: self-hosted
+    needs: build-and-push
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create namespace
+        run: kubectl apply -f deployments/kubernetes/namespace.yaml
+
+      - name: Create JWT secret
+        run: |
+          kubectl create secret generic jwt-keys \
+            --from-file=public.pem=secrets/jwt/public.pem \
+            --from-file=private.pem=secrets/jwt/private.pem \
+            -n order-system \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply ConfigMap & Secrets
+        run: |
+          kubectl apply -f deployments/kubernetes/configmap.yaml
+          kubectl apply -f deployments/kubernetes/secret.yaml
+
+      - name: Deploy services
+        run: kubectl apply -f deployments/kubernetes/services.yaml
+
+      - name: Restart deployments (pull new images)
+        run: |
+          kubectl rollout restart deployment/gateway -n order-system
+          kubectl rollout restart deployment/user-service -n order-system
+          kubectl rollout restart deployment/order-service -n order-system
+          kubectl rollout restart deployment/payment-service -n order-system
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/gateway -n order-system --timeout=120s
+          kubectl rollout status deployment/user-service -n order-system --timeout=120s
+          kubectl rollout status deployment/order-service -n order-system --timeout=120s
+          kubectl rollout status deployment/payment-service -n order-system --timeout=120s
+
+      - name: Show status
+        run: kubectl get pods -n order-system

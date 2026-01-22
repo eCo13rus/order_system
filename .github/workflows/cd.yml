@@ -77,8 +77,8 @@ jobs:
       - name: Create JWT secret
         run: |
           kubectl create secret generic jwt-keys \
-            --from-file=public.pem=secrets/jwt/public.pem \
-            --from-file=private.pem=secrets/jwt/private.pem \
+            --from-file=public.pem=/home/eco/order_system/secrets/jwt/public.pem \
+            --from-file=private.pem=/home/eco/order_system/secrets/jwt/private.pem \
             -n order-system \
             --dry-run=client -o yaml | kubectl apply -f -
 

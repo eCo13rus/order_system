@@ -17,7 +17,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/order-system
+  IMAGE_PREFIX: ghcr.io/eco13rus/order-system
 
 jobs:
   build-and-push:

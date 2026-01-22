@@ -76,11 +76,11 @@ jobs:
 
       - name: Create JWT secret
         run: |
+          kubectl delete secret jwt-keys -n order-system --ignore-not-found
           kubectl create secret generic jwt-keys \
             --from-file=public.pem=/home/eco/order_system/secrets/jwt/public.pem \
             --from-file=private.pem=/home/eco/order_system/secrets/jwt/private.pem \
-            -n order-system \
-            --dry-run=client -o yaml | kubectl apply -f -
+            -n order-system
 
       - name: Apply ConfigMap & Secrets
         run: |

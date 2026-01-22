@@ -33,6 +33,11 @@ data:
   PAYMENT_SERVICE_HOST: "payment-service"
   PAYMENT_SERVICE_PORT: "50053"
 
+  # Для Gateway (использует другие переменные)
+  GRPC_USER_SERVICE_ADDR: "user-service:50051"
+  GRPC_ORDER_SERVICE_ADDR: "order-service:50052"
+  GRPC_PAYMENT_SERVICE_ADDR: "payment-service:50053"
+
   # JWT
   JWT_PUBLIC_KEY_PATH: "/secrets/jwt/public.pem"
   JWT_PRIVATE_KEY_PATH: "/secrets/jwt/private.pem"

@@ -25,15 +25,15 @@ data:
   JAEGER_HOST: "192.168.1.114"
   JAEGER_OTLP_PORT: "4317"
 
-  # gRPC адреса сервисов (K8s DNS)
-  USER_SERVICE_HOST: "user-service"
+  # gRPC — для bind (сервисы слушают на 0.0.0.0)
+  USER_SERVICE_HOST: "0.0.0.0"
   USER_SERVICE_PORT: "50051"
-  ORDER_SERVICE_HOST: "order-service"
+  ORDER_SERVICE_HOST: "0.0.0.0"
   ORDER_SERVICE_PORT: "50052"
-  PAYMENT_SERVICE_HOST: "payment-service"
+  PAYMENT_SERVICE_HOST: "0.0.0.0"
   PAYMENT_SERVICE_PORT: "50053"
 
-  # Для Gateway (использует другие переменные)
+  # gRPC — для connect (Gateway подключается по K8s DNS)
   GRPC_USER_SERVICE_ADDR: "user-service:50051"
   GRPC_ORDER_SERVICE_ADDR: "order-service:50052"
   GRPC_PAYMENT_SERVICE_ADDR: "payment-service:50053"

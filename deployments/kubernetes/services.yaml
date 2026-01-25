@@ -16,6 +16,7 @@ spec:
       labels:
         app: gateway
     spec:
+      terminationGracePeriodSeconds: 20  # Код: 10s + буфер 10s
       containers:
         - name: gateway
           image: ghcr.io/eco13rus/order-system/gateway:latest
@@ -84,6 +85,7 @@ spec:
       labels:
         app: user-service
     spec:
+      terminationGracePeriodSeconds: 20
       containers:
         - name: user-service
           image: ghcr.io/eco13rus/order-system/user:latest
@@ -144,6 +146,7 @@ spec:
       labels:
         app: order-service
     spec:
+      terminationGracePeriodSeconds: 20
       containers:
         - name: order-service
           image: ghcr.io/eco13rus/order-system/order:latest
@@ -204,6 +207,7 @@ spec:
       labels:
         app: payment-service
     spec:
+      terminationGracePeriodSeconds: 20
       containers:
         - name: payment-service
           image: ghcr.io/eco13rus/order-system/payment:latest

@@ -82,10 +82,10 @@ jobs:
             --from-file=private.pem=/home/eco/order_system/secrets/jwt/private.pem \
             -n order-system
 
-      - name: Apply ConfigMap & Secrets
+      - name: Apply ConfigMap & SealedSecrets
         run: |
           kubectl apply -f deployments/kubernetes/configmap.yaml
-          kubectl apply -f deployments/kubernetes/secret.yaml
+          kubectl apply -f deployments/kubernetes/sealed-secret.yaml
 
       - name: Deploy services
         run: kubectl apply -f deployments/kubernetes/services.yaml

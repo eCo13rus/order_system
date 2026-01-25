@@ -21,6 +21,9 @@ coverage.out
 .DS_Store
 Thumbs.db
 
+# K8s секреты (НЕ коммитить открытые секреты!)
+deployments/kubernetes/secret.yaml
+
 .claude/agents/
 .claude/session-notes.md
 CLAUDE.md

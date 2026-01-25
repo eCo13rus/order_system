@@ -99,12 +99,6 @@ func NewServer(addr, service string, opts ...Option) *Server {
 	// /metrics — endpoint для Prometheus (он сам приходит сюда и забирает метрики)
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// /health — простой health check (полезно для отладки, оставляем для совместимости)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
-
 	// /healthz — liveness probe для Kubernetes
 	// Возвращает 200 OK если процесс жив (сервер отвечает = процесс работает)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

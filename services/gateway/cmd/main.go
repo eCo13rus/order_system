@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -125,13 +126,16 @@ func main() {
 	// Запускаем HTTP сервер для Prometheus метрик
 	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
 	var metricsServer *metrics.Server
+	var metricsWg sync.WaitGroup // WaitGroup для корректного завершения горутины Metrics Server
 	if cfg.Metrics.Enabled {
 		metricsServer = metrics.NewServer(
 			cfg.Metrics.Addr(),
 			"gateway",
 			metrics.WithReadinessCheck(readinessCheck),
 		)
+		metricsWg.Add(1)
 		go func() {
+			defer metricsWg.Done()
 			if err := metricsServer.Start(); err != nil {
 				logger.Error().Err(err).Msg("Ошибка Metrics Server")
 			}
@@ -209,11 +213,12 @@ func main() {
 		logger.Error().Err(err).Msg("Ошибка при остановке сервера")
 	}
 
-	// Останавливаем Metrics Server (если был запущен)
+	// Останавливаем Metrics Server (если был запущен) и ждём завершения горутины
 	if metricsServer != nil {
 		if err := metricsServer.Shutdown(ctx); err != nil {
 			logger.Error().Err(err).Msg("Ошибка остановки Metrics Server")
 		}
+		metricsWg.Wait() // Ждём завершения горутины Metrics Server
 	}
 
 	// Останавливаем Tracing

@@ -123,34 +123,6 @@ func Ctx(ctx context.Context) *zerolog.Logger {
 	return &l
 }
 
-// WithFields создает новый контекст с добавленными полями в логгер.
-// Поля будут автоматически включены во все последующие логи.
-//
-// Пример:
-//
-//	ctx = logger.WithFields(ctx, map[string]interface{}{
-//	    "user_id":  "123",
-//	    "order_id": "456",
-//	})
-func WithFields(ctx context.Context, fields map[string]interface{}) context.Context {
-	l := FromContext(ctx)
-
-	// Добавляем все поля к логгеру.
-	logCtx := l.With()
-	for key, value := range fields {
-		logCtx = logCtx.Interface(key, value)
-	}
-
-	return WithLogger(ctx, logCtx.Logger())
-}
-
-// NewContextWithIDs создает новый контекст с trace_id и correlation_id.
-// Удобный метод для инициализации контекста на входе в систему.
-//
-// Пример (в middleware):
-//
-//	ctx := logger.NewContextWithIDs(r.Context(), traceID, correlationID)
-//	r = r.WithContext(ctx)
 func NewContextWithIDs(ctx context.Context, traceID, correlationID string) context.Context {
 	if traceID != "" {
 		ctx = WithTraceID(ctx, traceID)

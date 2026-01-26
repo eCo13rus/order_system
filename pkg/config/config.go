@@ -117,21 +117,6 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// LoadFromFile загружает конфигурацию из указанного .env файла.
-func LoadFromFile(path string) (*Config, error) {
-	if err := godotenv.Load(path); err != nil {
-		return nil, fmt.Errorf("ошибка загрузки .env файла %s: %w", path, err)
-	}
-
-	cfg := &Config{}
-
-	if err := env.Parse(cfg); err != nil {
-		return nil, fmt.Errorf("ошибка парсинга конфигурации: %w", err)
-	}
-
-	return cfg, nil
-}
-
 // IsDevelopment возвращает true, если приложение запущено в development режиме.
 func (c *Config) IsDevelopment() bool {
 	return c.App.Env == "development"

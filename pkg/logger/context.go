@@ -111,13 +111,6 @@ func FromContext(ctx context.Context) zerolog.Logger {
 	return l
 }
 
-// Ctx возвращает указатель на zerolog.Logger из контекста.
-// Это альтернативный способ использования, совместимый с zerolog.Ctx().
-//
-// Пример:
-//
-//	log := logger.Ctx(ctx)
-//	log.Info().Msg("Сообщение")
 func Ctx(ctx context.Context) *zerolog.Logger {
 	l := FromContext(ctx)
 	return &l

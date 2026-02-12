@@ -443,7 +443,7 @@ func (r *outboxRepository) GetUnprocessed(ctx context.Context, limit int) ([]*Ou
 	// Выбираем записи где processed_at IS NULL, сортируем по created_at
 	// Записи с retry_count > 0 откладываем (простая стратегия backoff)
 	if err := r.db.WithContext(ctx).
-		Where("processed_at IS NULL").
+		Where("processed_at IS NULL AND aggregate_type = ?", "order").
 		Order("retry_count ASC, created_at ASC").
 		Limit(limit).
 		Find(&models).Error; err != nil {

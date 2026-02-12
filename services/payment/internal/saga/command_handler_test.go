@@ -12,6 +12,7 @@ import (
 
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/services/payment/internal/domain"
+	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/service"
 )
 
@@ -19,27 +20,35 @@ import (
 // Моки
 // =============================================================================
 
-// mockSender — мок для MessageSender (отправка в Kafka).
-type mockSender struct {
-	lastTopic string
-	lastKey   []byte
-	lastValue []byte
-	lastReply *Reply
-	sendErr   error
+// mockOutboxRepo — мок для OutboxRepository (запись reply в outbox).
+type mockOutboxRepo struct {
+	lastRecord *outbox.Outbox // Последняя записанная запись
+	lastReply  *Reply         // Распарсенный Reply из payload
+	createErr  error          // Ошибка при Create
 }
 
-func (m *mockSender) Send(ctx context.Context, topic string, key, value []byte) error {
-	m.lastTopic = topic
-	m.lastKey = key
-	m.lastValue = value
+func (m *mockOutboxRepo) Create(ctx context.Context, record *outbox.Outbox) error {
+	m.lastRecord = record
 
-	// Парсим Reply для проверки в тестах
-	if len(value) > 0 {
+	// Парсим Reply из payload для проверки в тестах
+	if len(record.Payload) > 0 {
 		m.lastReply = &Reply{}
-		_ = json.Unmarshal(value, m.lastReply)
+		_ = json.Unmarshal(record.Payload, m.lastReply)
 	}
 
-	return m.sendErr
+	return m.createErr
+}
+
+func (m *mockOutboxRepo) GetUnprocessed(ctx context.Context, limit int) ([]*outbox.Outbox, error) {
+	return nil, nil // Не используется в тестах command_handler
+}
+
+func (m *mockOutboxRepo) MarkProcessed(ctx context.Context, id string) error {
+	return nil // Не используется в тестах command_handler
+}
+
+func (m *mockOutboxRepo) MarkFailed(ctx context.Context, id string, err error) error {
+	return nil // Не используется в тестах command_handler
 }
 
 // mockPaymentService — мок для тестирования saga handler.
@@ -372,12 +381,12 @@ func TestReply_Serialization(t *testing.T) {
 }
 
 // =============================================================================
-// Тесты handleMessage (полный flow с отправкой reply)
+// Тесты handleMessage (полный flow с сохранением reply в outbox)
 // =============================================================================
 
 func TestCommandHandler_HandleMessage_ProcessPayment_Success(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	paymentSvc := &mockPaymentService{
 		processResult: &service.ProcessPaymentResult{
 			PaymentID: "payment-msg-123",
@@ -386,7 +395,7 @@ func TestCommandHandler_HandleMessage_ProcessPayment_Success(t *testing.T) {
 	}
 
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: paymentSvc,
 	}
 
@@ -398,16 +407,19 @@ func TestCommandHandler_HandleMessage_ProcessPayment_Success(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.NotNil(t, sender.lastReply)
-	assert.Equal(t, ReplySuccess, sender.lastReply.Status)
-	assert.Equal(t, "saga-msg", sender.lastReply.SagaID)
-	assert.Equal(t, "payment-msg-123", sender.lastReply.PaymentID)
-	assert.Equal(t, kafka.TopicSagaReplies, sender.lastTopic)
+	require.NotNil(t, outboxRepo.lastRecord)
+	require.NotNil(t, outboxRepo.lastReply)
+	assert.Equal(t, ReplySuccess, outboxRepo.lastReply.Status)
+	assert.Equal(t, "saga-msg", outboxRepo.lastReply.SagaID)
+	assert.Equal(t, "payment-msg-123", outboxRepo.lastReply.PaymentID)
+	assert.Equal(t, kafka.TopicSagaReplies, outboxRepo.lastRecord.Topic)
+	assert.Equal(t, "saga-msg", outboxRepo.lastRecord.MessageKey)
+	assert.Equal(t, "payment", outboxRepo.lastRecord.AggregateType)
 }
 
 func TestCommandHandler_HandleMessage_ProcessPayment_Failed(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	paymentSvc := &mockPaymentService{
 		processResult: &service.ProcessPaymentResult{
 			PaymentID:     "payment-fail",
@@ -417,7 +429,7 @@ func TestCommandHandler_HandleMessage_ProcessPayment_Failed(t *testing.T) {
 	}
 
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: paymentSvc,
 	}
 
@@ -429,14 +441,15 @@ func TestCommandHandler_HandleMessage_ProcessPayment_Failed(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.NotNil(t, sender.lastReply)
-	assert.Equal(t, ReplyFailed, sender.lastReply.Status)
-	assert.Equal(t, "недостаточно средств", sender.lastReply.Error)
+	require.NotNil(t, outboxRepo.lastReply)
+	assert.Equal(t, ReplyFailed, outboxRepo.lastReply.Status)
+	assert.Equal(t, "недостаточно средств", outboxRepo.lastReply.Error)
+	assert.Equal(t, "saga.reply.FAILED", outboxRepo.lastRecord.EventType)
 }
 
 func TestCommandHandler_HandleMessage_RefundPayment_Success(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	paymentSvc := &mockPaymentService{
 		payment: &domain.Payment{
 			ID:     "payment-refund",
@@ -446,7 +459,7 @@ func TestCommandHandler_HandleMessage_RefundPayment_Success(t *testing.T) {
 	}
 
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: paymentSvc,
 	}
 
@@ -458,16 +471,16 @@ func TestCommandHandler_HandleMessage_RefundPayment_Success(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.NotNil(t, sender.lastReply)
-	assert.Equal(t, ReplySuccess, sender.lastReply.Status)
-	assert.Equal(t, "payment-refund", sender.lastReply.PaymentID)
+	require.NotNil(t, outboxRepo.lastReply)
+	assert.Equal(t, ReplySuccess, outboxRepo.lastReply.Status)
+	assert.Equal(t, "payment-refund", outboxRepo.lastReply.PaymentID)
 }
 
 func TestCommandHandler_HandleMessage_UnknownCommand(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: &mockPaymentService{},
 	}
 
@@ -479,16 +492,16 @@ func TestCommandHandler_HandleMessage_UnknownCommand(t *testing.T) {
 
 	// Assert
 	require.NoError(t, err)
-	require.NotNil(t, sender.lastReply)
-	assert.Equal(t, ReplyFailed, sender.lastReply.Status)
-	assert.Contains(t, sender.lastReply.Error, "неизвестный тип команды")
+	require.NotNil(t, outboxRepo.lastReply)
+	assert.Equal(t, ReplyFailed, outboxRepo.lastReply.Status)
+	assert.Contains(t, outboxRepo.lastReply.Error, "неизвестный тип команды")
 }
 
 func TestCommandHandler_HandleMessage_InvalidJSON(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: &mockPaymentService{},
 	}
 
@@ -499,18 +512,18 @@ func TestCommandHandler_HandleMessage_InvalidJSON(t *testing.T) {
 
 	// Assert — битый JSON не ретраится, возвращаем nil
 	require.NoError(t, err)
-	assert.Nil(t, sender.lastReply) // Reply не отправлен
+	assert.Nil(t, outboxRepo.lastRecord) // Outbox не записан
 }
 
 func TestCommandHandler_HandleMessage_ServiceError(t *testing.T) {
 	// Arrange — ошибка сервиса
-	sender := &mockSender{}
+	outboxRepo := &mockOutboxRepo{}
 	paymentSvc := &mockPaymentService{
 		processErr: errors.New("database connection failed"),
 	}
 
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: paymentSvc,
 	}
 
@@ -520,17 +533,17 @@ func TestCommandHandler_HandleMessage_ServiceError(t *testing.T) {
 	// Act
 	err := handler.handleMessage(context.Background(), msg)
 
-	// Assert — при ошибке сервиса формируется Reply с FAILED
+	// Assert — при ошибке сервиса формируется Reply с FAILED и сохраняется в outbox
 	require.NoError(t, err)
-	require.NotNil(t, sender.lastReply)
-	assert.Equal(t, ReplyFailed, sender.lastReply.Status)
-	assert.Contains(t, sender.lastReply.Error, "database connection failed")
+	require.NotNil(t, outboxRepo.lastReply)
+	assert.Equal(t, ReplyFailed, outboxRepo.lastReply.Status)
+	assert.Contains(t, outboxRepo.lastReply.Error, "database connection failed")
 }
 
-func TestCommandHandler_HandleMessage_SendReplyError(t *testing.T) {
-	// Arrange — ошибка отправки reply
-	sender := &mockSender{
-		sendErr: errors.New("kafka unavailable"),
+func TestCommandHandler_HandleMessage_OutboxError(t *testing.T) {
+	// Arrange — ошибка записи в outbox
+	outboxRepo := &mockOutboxRepo{
+		createErr: errors.New("outbox db unavailable"),
 	}
 	paymentSvc := &mockPaymentService{
 		processResult: &service.ProcessPaymentResult{
@@ -540,29 +553,29 @@ func TestCommandHandler_HandleMessage_SendReplyError(t *testing.T) {
 	}
 
 	handler := &CommandHandler{
-		sender:         sender,
+		outboxRepo:     outboxRepo,
 		paymentService: paymentSvc,
 	}
 
-	cmdJSON := `{"saga_id":"saga-send-err","order_id":"order-send-err","type":"PROCESS_PAYMENT","amount":1000}`
+	cmdJSON := `{"saga_id":"saga-outbox-err","order_id":"order-outbox-err","type":"PROCESS_PAYMENT","amount":1000}`
 	msg := &kafka.Message{Value: []byte(cmdJSON)}
 
 	// Act
 	err := handler.handleMessage(context.Background(), msg)
 
-	// Assert — ошибка отправки возвращается для retry
+	// Assert — ошибка outbox возвращается для retry
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "kafka unavailable")
+	assert.Contains(t, err.Error(), "outbox db unavailable")
 }
 
 // =============================================================================
-// Тесты sendReply
+// Тесты saveReplyToOutbox
 // =============================================================================
 
-func TestCommandHandler_SendReply(t *testing.T) {
+func TestCommandHandler_SaveReplyToOutbox(t *testing.T) {
 	// Arrange
-	sender := &mockSender{}
-	handler := &CommandHandler{sender: sender}
+	outboxRepo := &mockOutboxRepo{}
+	handler := &CommandHandler{outboxRepo: outboxRepo}
 
 	reply := &Reply{
 		SagaID:    "saga-send",
@@ -573,11 +586,16 @@ func TestCommandHandler_SendReply(t *testing.T) {
 	}
 
 	// Act
-	err := handler.sendReply(context.Background(), reply)
+	err := handler.saveReplyToOutbox(context.Background(), reply)
 
 	// Assert
 	require.NoError(t, err)
-	assert.Equal(t, kafka.TopicSagaReplies, sender.lastTopic)
-	assert.Equal(t, []byte("saga-send"), sender.lastKey)
-	assert.Equal(t, ReplySuccess, sender.lastReply.Status)
+	require.NotNil(t, outboxRepo.lastRecord)
+	assert.Equal(t, kafka.TopicSagaReplies, outboxRepo.lastRecord.Topic)
+	assert.Equal(t, "saga-send", outboxRepo.lastRecord.MessageKey)
+	assert.Equal(t, "payment", outboxRepo.lastRecord.AggregateType)
+	assert.Equal(t, "order-send", outboxRepo.lastRecord.AggregateID)
+	assert.Equal(t, "saga.reply.SUCCESS", outboxRepo.lastRecord.EventType)
+	assert.NotEmpty(t, outboxRepo.lastRecord.ID) // UUID сгенерирован
+	assert.Equal(t, ReplySuccess, outboxRepo.lastReply.Status)
 }

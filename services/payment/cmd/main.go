@@ -1,5 +1,6 @@
 // Payment Service — микросервис обработки платежей для Saga Orchestration.
-// Слушает saga.commands из Kafka, обрабатывает платежи и отправляет saga.replies.
+// Слушает saga.commands из Kafka, обрабатывает платежи и сохраняет reply в outbox.
+// OutboxWorker отправляет reply в Kafka (saga.replies) с гарантией at-least-once.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/metrics"
 	"example.com/order-system/pkg/tracing"
+	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/repository"
 	"example.com/order-system/services/payment/internal/saga"
 	"example.com/order-system/services/payment/internal/service"
@@ -96,9 +98,8 @@ func main() {
 	// === Observability: Metrics ===
 
 	// Запускаем HTTP сервер для Prometheus метрик
-	// Порт настраивается через METRICS_PORT (дефолт 9090, локально переопределяем)
 	var metricsServer *metrics.Server
-	var metricsWg sync.WaitGroup // WaitGroup для корректного завершения горутины Metrics Server
+	var metricsWg sync.WaitGroup
 	if cfg.Metrics.Enabled {
 		metricsServer = metrics.NewServer(
 			cfg.Metrics.Addr(),
@@ -120,9 +121,12 @@ func main() {
 	paymentRepo := repository.NewPaymentRepository(db)
 	paymentService := service.NewPaymentService(paymentRepo, rdb)
 
+	// Outbox Repository для записи reply (Outbox Pattern)
+	outboxRepo := outbox.NewOutboxRepository(db)
+
 	// Контекст для graceful shutdown
 	ctx, cancel = context.WithCancel(context.Background())
-	defer cancel() // Гарантируем отмену контекста при любом завершении
+	defer cancel()
 
 	// Инициализируем Kafka компоненты
 	var commandHandler *saga.CommandHandler
@@ -136,7 +140,7 @@ func main() {
 			log.Warn().Err(err).Msg("Не удалось создать топики (возможно Kafka недоступна)")
 		}
 
-		// Создаём Producer для отправки saga.replies
+		// Создаём Producer для Outbox Worker (отправка saga.replies в Kafka)
 		kafkaProducer, err = kafka.NewProducer(kafka.Config{Brokers: cfg.Kafka.Brokers})
 		if err != nil {
 			log.Fatal().Err(err).Msg("Ошибка создания Kafka Producer")
@@ -155,8 +159,8 @@ func main() {
 		// Устанавливаем DLQ Producer для ошибочных сообщений
 		kafkaConsumer.SetDLQProducer(kafkaProducer)
 
-		// Создаём Command Handler
-		commandHandler = saga.NewCommandHandler(kafkaConsumer, kafkaProducer, paymentService)
+		// Создаём Command Handler (использует outbox вместо прямой отправки в Kafka)
+		commandHandler = saga.NewCommandHandler(kafkaConsumer, outboxRepo, paymentService)
 
 		// Запускаем обработчик команд
 		go func() {
@@ -166,7 +170,13 @@ func main() {
 			}
 		}()
 
-		log.Info().Msg("Payment Service Kafka Handler запущен")
+		// Запускаем Outbox Worker (читает outbox → отправляет в Kafka)
+		outboxWorker := outbox.NewOutboxWorker(outboxRepo, kafkaProducer, outbox.DefaultWorkerConfig())
+		go func() {
+			outboxWorker.Run(ctx)
+		}()
+
+		log.Info().Msg("Payment Service Kafka Handler + Outbox Worker запущены")
 	} else {
 		log.Warn().Msg("Kafka не настроена — обработка Saga команд отключена")
 	}
@@ -178,7 +188,7 @@ func main() {
 
 	log.Info().Msg("Получен сигнал завершения, останавливаем сервер...")
 
-	// Отменяем контекст — останавливаем Kafka Consumer
+	// Отменяем контекст — останавливаем Kafka Consumer и Outbox Worker
 	cancel()
 
 	// Закрываем Kafka компоненты
@@ -207,7 +217,7 @@ func main() {
 		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 			log.Error().Err(err).Msg("Ошибка остановки Metrics Server")
 		}
-		metricsWg.Wait() // Ждём завершения горутины Metrics Server
+		metricsWg.Wait()
 	}
 
 	// Останавливаем Tracing
@@ -222,7 +232,6 @@ func main() {
 
 // connectMySQL создаёт подключение к MySQL через GORM.
 func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
-	// Настраиваем логгер GORM
 	logLevel := gormlogger.Silent
 	if debug {
 		logLevel = gormlogger.Info
@@ -235,7 +244,6 @@ func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
 		return nil, fmt.Errorf("ошибка подключения к MySQL: %w", err)
 	}
 
-	// Проверяем подключение
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -248,7 +256,6 @@ func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
 		return nil, fmt.Errorf("ошибка ping MySQL: %w", err)
 	}
 
-	// Настраиваем пул соединений
 	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
 	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)

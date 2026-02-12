@@ -48,7 +48,7 @@ func NewConsumer(cfg Config, topic string, groupID string) (*Consumer, error) {
 		MinBytes:       1,    // Минимум 1 байт для быстрой обработки
 		MaxBytes:       10e6, // 10MB максимум
 		MaxWait:        100 * time.Millisecond,
-		CommitInterval: time.Second, // Автокоммит каждую секунду
+		CommitInterval: 0, // Мгновенный коммит при вызове CommitMessages
 		StartOffset:    kafka.LastOffset,
 	})
 

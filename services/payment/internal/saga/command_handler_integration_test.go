@@ -25,6 +25,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	pkgkafka "example.com/order-system/pkg/kafka"
+	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/repository"
 	"example.com/order-system/services/payment/internal/service"
 )
@@ -84,6 +85,7 @@ func TestMain(m *testing.M) {
 
 	// Очищаем тестовые данные от предыдущих запусков
 	testDB.Exec("DELETE FROM payments WHERE saga_id LIKE 'saga-test-%'")
+	testDB.Exec("DELETE FROM outbox WHERE aggregate_id LIKE 'order-%'")
 
 	// 2. Redis — miniredis (встроенный мок)
 	miniRedis, err = miniredis.Run()
@@ -110,7 +112,7 @@ func TestMain(m *testing.M) {
 		MaxWait:  100 * time.Millisecond,
 	})
 
-	// 5. Запускаем CommandHandler в фоне
+	// 5. Запускаем CommandHandler + OutboxWorker в фоне
 	if err := startHandler(); err != nil {
 		fmt.Printf("Ошибка запуска handler: %v\n", err)
 		os.Exit(1)
@@ -131,11 +133,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// startHandler запускает CommandHandler для обработки команд.
+// startHandler запускает CommandHandler + OutboxWorker для обработки команд.
 func startHandler() error {
 	// Создаём зависимости
 	repo := repository.NewPaymentRepository(testDB)
 	paymentSvc := service.NewPaymentService(repo, testRedis)
+
+	// Outbox Repository для записи reply
+	outboxRepo := outbox.NewOutboxRepository(testDB)
 
 	// Kafka consumer для handler
 	cfg := pkgkafka.Config{Brokers: []string{kafkaBroker()}}
@@ -144,17 +149,25 @@ func startHandler() error {
 		return err
 	}
 
+	// Kafka producer для Outbox Worker
 	producer, err := pkgkafka.NewProducer(cfg)
 	if err != nil {
 		return err
 	}
 
-	handler = NewCommandHandler(consumer, producer, paymentSvc)
+	// Command Handler использует outbox
+	handler = NewCommandHandler(consumer, outboxRepo, paymentSvc)
 
-	// Запускаем в горутине
+	// Outbox Worker отправляет reply из outbox в Kafka
+	outboxWorker := outbox.NewOutboxWorker(outboxRepo, producer, outbox.DefaultWorkerConfig())
+
+	// Запускаем в горутинах
 	handlerCtx, handlerCancel = context.WithCancel(context.Background())
 	go func() {
 		_ = handler.Run(handlerCtx)
+	}()
+	go func() {
+		outboxWorker.Run(handlerCtx)
 	}()
 
 	return nil
@@ -211,9 +224,10 @@ func generateSagaID() string {
 	return "saga-test-" + uuid.New().String()[:8]
 }
 
-// cleanupPayment удаляет платёж после теста.
+// cleanupPayment удаляет платёж и outbox записи после теста.
 func cleanupPayment(sagaID string) {
 	testDB.Exec("DELETE FROM payments WHERE saga_id = ?", sagaID)
+	testDB.Exec("DELETE FROM outbox WHERE message_key = ?", sagaID)
 }
 
 // =============================================================================

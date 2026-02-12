@@ -1,5 +1,6 @@
 // Package saga реализует обработку Saga команд из Kafka.
-// Payment Service слушает saga.commands, обрабатывает платежи и отправляет saga.replies.
+// Payment Service слушает saga.commands, обрабатывает платежи и сохраняет reply в outbox.
+// OutboxWorker затем отправляет reply в Kafka (saga.replies) с гарантией at-least-once.
 package saga
 
 import (
@@ -8,8 +9,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
+	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/service"
 )
 
@@ -58,35 +62,28 @@ type Reply struct {
 }
 
 // =============================================================================
-// Интерфейсы для тестируемости
-// =============================================================================
-
-// MessageSender — интерфейс для отправки сообщений в Kafka.
-// Позволяет мокать producer в unit-тестах.
-type MessageSender interface {
-	Send(ctx context.Context, topic string, key, value []byte) error
-}
-
-// =============================================================================
 // Command Handler
 // =============================================================================
 
 // CommandHandler обрабатывает Saga команды из Kafka.
+// Вместо прямой отправки reply в Kafka использует Outbox Pattern:
+// reply записывается в таблицу outbox, OutboxWorker отправляет в Kafka.
 type CommandHandler struct {
 	consumer       *kafka.Consumer
-	sender         MessageSender // Интерфейс для отправки ответов
+	outboxRepo     outbox.OutboxRepository // Запись reply в outbox (вместо прямой отправки в Kafka)
 	paymentService service.PaymentService
 }
 
 // NewCommandHandler создаёт новый обработчик команд.
+// outboxRepo используется для сохранения reply в outbox таблицу (Outbox Pattern).
 func NewCommandHandler(
 	consumer *kafka.Consumer,
-	producer *kafka.Producer,
+	outboxRepo outbox.OutboxRepository,
 	paymentService service.PaymentService,
 ) *CommandHandler {
 	return &CommandHandler{
 		consumer:       consumer,
-		sender:         producer, // *kafka.Producer реализует MessageSender
+		outboxRepo:     outboxRepo,
 		paymentService: paymentService,
 	}
 }
@@ -158,9 +155,9 @@ func (h *CommandHandler) handleMessage(ctx context.Context, msg *kafka.Message) 
 		}
 	}
 
-	// Отправляем ответ
-	if err := h.sendReply(ctx, reply); err != nil {
-		log.Error().Err(err).Str("saga_id", cmd.SagaID).Msg("Ошибка отправки ответа")
+	// Сохраняем reply в outbox (вместо прямой отправки в Kafka)
+	if err := h.saveReplyToOutbox(ctx, reply); err != nil {
+		log.Error().Err(err).Str("saga_id", cmd.SagaID).Msg("Ошибка сохранения reply в outbox")
 		return err // Ретраим
 	}
 
@@ -260,15 +257,26 @@ func (h *CommandHandler) handleRefundPayment(ctx context.Context, cmd *Command) 
 	}, nil
 }
 
-// sendReply отправляет ответ в Kafka.
-func (h *CommandHandler) sendReply(ctx context.Context, reply *Reply) error {
+// saveReplyToOutbox сохраняет reply в таблицу outbox.
+// OutboxWorker прочитает запись и отправит в Kafka с гарантией at-least-once.
+func (h *CommandHandler) saveReplyToOutbox(ctx context.Context, reply *Reply) error {
 	data, err := json.Marshal(reply)
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации ответа: %w", err)
 	}
 
-	// Ключ партиционирования — saga_id (все сообщения одной саги в одной партиции)
-	return h.sender.Send(ctx, kafka.TopicSagaReplies, []byte(reply.SagaID), data)
+	record := &outbox.Outbox{
+		ID:            uuid.New().String(),
+		AggregateType: "payment",
+		AggregateID:   reply.OrderID,
+		EventType:     "saga.reply." + string(reply.Status),
+		Topic:         kafka.TopicSagaReplies,
+		MessageKey:    reply.SagaID, // Партиционирование по saga_id
+		Payload:       data,
+		CreatedAt:     time.Now(),
+	}
+
+	return h.outboxRepo.Create(ctx, record)
 }
 
 // Close закрывает обработчик.

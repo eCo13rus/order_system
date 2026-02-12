@@ -27,7 +27,7 @@ func NewProducer(cfg Config) (*Producer, error) {
 		Addr:         kafka.TCP(cfg.Brokers...),
 		Balancer:     &kafka.LeastBytes{},
 		BatchTimeout: 10 * time.Millisecond, // Быстрая отправка для саги
-		RequiredAcks: kafka.RequireOne,      // Ждём подтверждения от лидера
+		RequiredAcks: kafka.RequireAll,      // Ждём подтверждения от всех ISR реплик
 		Async:        false,                 // По умолчанию sync режим
 	}
 

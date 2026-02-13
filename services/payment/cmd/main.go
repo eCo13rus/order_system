@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,18 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
-
 	"example.com/order-system/pkg/config"
+	dbpkg "example.com/order-system/pkg/db"
 	"example.com/order-system/pkg/healthcheck"
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/metrics"
+	"example.com/order-system/pkg/outbox"
 	"example.com/order-system/pkg/tracing"
-	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/repository"
 	"example.com/order-system/services/payment/internal/saga"
 	"example.com/order-system/services/payment/internal/service"
@@ -66,14 +63,14 @@ func main() {
 	// === Подключение к зависимостям ===
 
 	// Подключаемся к MySQL
-	db, err := connectMySQL(cfg.MySQL, cfg.IsDevelopment())
+	db, err := dbpkg.ConnectMySQL(cfg.MySQL, cfg.IsDevelopment())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Ошибка подключения к MySQL")
 	}
 	log.Info().Msg("Подключение к MySQL установлено")
 
 	// Подключаемся к Redis
-	rdb := connectRedis(cfg.Redis)
+	rdb := dbpkg.ConnectRedis(cfg.Redis)
 	defer func() {
 		if err := rdb.Close(); err != nil {
 			log.Error().Err(err).Msg("Ошибка закрытия Redis")
@@ -122,7 +119,7 @@ func main() {
 	paymentService := service.NewPaymentService(paymentRepo, rdb)
 
 	// Outbox Repository для записи reply (Outbox Pattern)
-	outboxRepo := outbox.NewOutboxRepository(db)
+	outboxRepo := outbox.NewOutboxRepository(db, "payment")
 
 	// Контекст для graceful shutdown
 	ctx, cancel = context.WithCancel(context.Background())
@@ -131,6 +128,7 @@ func main() {
 	// Инициализируем Kafka компоненты
 	var commandHandler *saga.CommandHandler
 	var kafkaProducer *kafka.Producer
+	var workersWg sync.WaitGroup // WaitGroup для ожидания завершения фоновых воркеров при shutdown
 
 	if len(cfg.Kafka.Brokers) > 0 {
 		log.Info().Strs("brokers", cfg.Kafka.Brokers).Msg("Инициализация Kafka")
@@ -162,17 +160,31 @@ func main() {
 		// Создаём Command Handler (использует outbox вместо прямой отправки в Kafka)
 		commandHandler = saga.NewCommandHandler(kafkaConsumer, outboxRepo, paymentService)
 
-		// Запускаем обработчик команд
+		// WaitGroup для ожидания завершения фоновых воркеров при shutdown
+		workersWg.Add(1)
 		go func() {
+			defer workersWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Паника в обработчике Saga команд")
+				}
+			}()
 			log.Info().Msg("Запуск обработчика Saga команд")
-			if err := commandHandler.Run(ctx); err != nil && err != context.Canceled {
+			if err := commandHandler.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error().Err(err).Msg("Ошибка обработчика Saga команд")
 			}
 		}()
 
 		// Запускаем Outbox Worker (читает outbox → отправляет в Kafka)
-		outboxWorker := outbox.NewOutboxWorker(outboxRepo, kafkaProducer, outbox.DefaultWorkerConfig())
+		outboxWorker := outbox.NewOutboxWorker(outboxRepo, kafkaProducer, outbox.DefaultWorkerConfig(), "payment")
+		workersWg.Add(1)
 		go func() {
+			defer workersWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Паника в Payment Outbox Worker")
+				}
+			}()
 			outboxWorker.Run(ctx)
 		}()
 
@@ -190,6 +202,9 @@ func main() {
 
 	// Отменяем контекст — останавливаем Kafka Consumer и Outbox Worker
 	cancel()
+
+	// Ждём завершения всех фоновых воркеров перед закрытием ресурсов
+	workersWg.Wait()
 
 	// Закрываем Kafka компоненты
 	if commandHandler != nil {
@@ -228,46 +243,4 @@ func main() {
 	}
 
 	log.Info().Msg("Payment Service остановлен")
-}
-
-// connectMySQL создаёт подключение к MySQL через GORM.
-func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
-	logLevel := gormlogger.Silent
-	if debug {
-		logLevel = gormlogger.Info
-	}
-
-	db, err := gorm.Open(mysql.Open(cfg.DSN()), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(logLevel),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ошибка подключения к MySQL: %w", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка получения sql.DB: %w", err)
-	}
-
-	if err := sqlDB.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("ошибка ping MySQL: %w", err)
-	}
-
-	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-
-	return db, nil
-}
-
-// connectRedis создаёт клиент Redis.
-func connectRedis(cfg config.RedisConfig) *redis.Client {
-	return redis.NewClient(&redis.Options{
-		Addr:     cfg.Addr(),
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	})
 }

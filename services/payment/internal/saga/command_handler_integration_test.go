@@ -25,7 +25,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	pkgkafka "example.com/order-system/pkg/kafka"
-	"example.com/order-system/services/payment/internal/outbox"
+	"example.com/order-system/pkg/outbox"
 	"example.com/order-system/services/payment/internal/repository"
 	"example.com/order-system/services/payment/internal/service"
 )
@@ -140,7 +140,7 @@ func startHandler() error {
 	paymentSvc := service.NewPaymentService(repo, testRedis)
 
 	// Outbox Repository для записи reply
-	outboxRepo := outbox.NewOutboxRepository(testDB)
+	outboxRepo := outbox.NewOutboxRepository(testDB, "payment")
 
 	// Kafka consumer для handler
 	cfg := pkgkafka.Config{Brokers: []string{kafkaBroker()}}
@@ -159,7 +159,7 @@ func startHandler() error {
 	handler = NewCommandHandler(consumer, outboxRepo, paymentSvc)
 
 	// Outbox Worker отправляет reply из outbox в Kafka
-	outboxWorker := outbox.NewOutboxWorker(outboxRepo, producer, outbox.DefaultWorkerConfig())
+	outboxWorker := outbox.NewOutboxWorker(outboxRepo, producer, outbox.DefaultWorkerConfig(), "payment")
 
 	// Запускаем в горутинах
 	handlerCtx, handlerCancel = context.WithCancel(context.Background())

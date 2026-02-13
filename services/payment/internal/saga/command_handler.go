@@ -13,53 +13,28 @@ import (
 
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
-	"example.com/order-system/services/payment/internal/outbox"
+	"example.com/order-system/pkg/outbox"
+	sagatypes "example.com/order-system/pkg/saga"
 	"example.com/order-system/services/payment/internal/service"
 )
 
 // =============================================================================
-// Типы команд и ответов (совместимы с Order Service)
+// Алиасы типов команд/ответов из pkg/saga (единый источник правды)
 // =============================================================================
 
-// CommandType — тип команды саги.
-type CommandType string
-
-const (
-	// CommandProcessPayment — команда на обработку платежа.
-	CommandProcessPayment CommandType = "PROCESS_PAYMENT"
-
-	// CommandRefundPayment — команда на возврат платежа.
-	CommandRefundPayment CommandType = "REFUND_PAYMENT"
+type (
+	CommandType = sagatypes.CommandType
+	Command     = sagatypes.Command
+	ReplyStatus = sagatypes.ReplyStatus
+	Reply       = sagatypes.Reply
 )
 
-// Command — команда из Order Service через Kafka.
-type Command struct {
-	SagaID    string      `json:"saga_id"`   // ID саги для корреляции
-	OrderID   string      `json:"order_id"`  // ID заказа
-	Type      CommandType `json:"type"`      // Тип команды
-	Amount    int64       `json:"amount"`    // Сумма в минимальных единицах
-	Currency  string      `json:"currency"`  // Валюта
-	UserID    string      `json:"user_id"`   // ID пользователя
-	Timestamp time.Time   `json:"timestamp"` // Время создания команды
-}
-
-// ReplyStatus — статус ответа.
-type ReplyStatus string
-
 const (
-	ReplySuccess ReplyStatus = "SUCCESS"
-	ReplyFailed  ReplyStatus = "FAILED"
+	CommandProcessPayment = sagatypes.CommandProcessPayment
+	CommandRefundPayment  = sagatypes.CommandRefundPayment
+	ReplySuccess          = sagatypes.ReplySuccess
+	ReplyFailed           = sagatypes.ReplyFailed
 )
-
-// Reply — ответ для Order Service через Kafka.
-type Reply struct {
-	SagaID    string      `json:"saga_id"`              // ID саги для корреляции
-	OrderID   string      `json:"order_id"`             // ID заказа
-	Status    ReplyStatus `json:"status"`               // Результат операции
-	PaymentID string      `json:"payment_id,omitempty"` // ID платежа (при успехе)
-	Error     string      `json:"error,omitempty"`      // Текст ошибки (при неудаче)
-	Timestamp time.Time   `json:"timestamp"`            // Время ответа
-}
 
 // =============================================================================
 // Command Handler

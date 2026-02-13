@@ -12,13 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"example.com/order-system/pkg/config"
+	dbpkg "example.com/order-system/pkg/db"
 	"example.com/order-system/pkg/healthcheck"
 	"example.com/order-system/pkg/jwt"
 	"example.com/order-system/pkg/logger"
@@ -68,14 +65,14 @@ func main() {
 	// === Подключение к зависимостям ===
 
 	// Подключаемся к MySQL
-	db, err := connectMySQL(cfg.MySQL, cfg.IsDevelopment())
+	db, err := dbpkg.ConnectMySQL(cfg.MySQL, cfg.IsDevelopment())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Ошибка подключения к MySQL")
 	}
 	log.Info().Msg("Подключение к MySQL установлено")
 
 	// Подключаемся к Redis
-	rdb := connectRedis(cfg.Redis)
+	rdb := dbpkg.ConnectRedis(cfg.Redis)
 	defer func() {
 		if err := rdb.Close(); err != nil {
 			log.Error().Err(err).Msg("Ошибка закрытия Redis")
@@ -139,7 +136,8 @@ func main() {
 	// Создаём слои приложения (Clean Architecture)
 	userRepo := repository.NewUserRepository(db)
 	jwtAdapter := service.NewJWTManagerAdapter(jwtManager)
-	userService := service.NewUserService(userRepo, jwtAdapter)
+	loginLimiter := service.NewLoginLimiter(rdb)
+	userService := service.NewUserService(userRepo, jwtAdapter, loginLimiter)
 	userHandler := usergrpc.NewHandler(userService)
 
 	// Создаём gRPC сервер с middleware
@@ -160,9 +158,14 @@ func main() {
 
 	// Graceful shutdown
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("Паника в gRPC сервере")
+			}
+		}()
 		log.Info().Str("addr", addr).Msg("gRPC сервер запущен")
 		if err := grpcServer.Serve(listener); err != nil {
-			log.Fatal().Err(err).Msg("Ошибка gRPC сервера")
+			log.Error().Err(err).Msg("Ошибка gRPC сервера")
 		}
 	}()
 
@@ -173,8 +176,20 @@ func main() {
 
 	log.Info().Msg("Получен сигнал завершения, останавливаем сервер...")
 
-	// Graceful stop gRPC сервера
-	grpcServer.GracefulStop()
+	// Graceful stop gRPC сервера с таймаутом 10 секунд.
+	// Если за 10 секунд не завершатся текущие запросы — принудительный Stop().
+	grpcDone := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(grpcDone)
+	}()
+	select {
+	case <-grpcDone:
+		log.Info().Msg("gRPC сервер остановлен корректно")
+	case <-time.After(10 * time.Second):
+		log.Warn().Msg("Таймаут GracefulStop, принудительная остановка gRPC")
+		grpcServer.Stop()
+	}
 
 	// Закрываем подключение к MySQL
 	if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
@@ -201,41 +216,4 @@ func main() {
 	}
 
 	log.Info().Msg("User Service остановлен")
-}
-
-// connectMySQL создаёт подключение к MySQL через GORM.
-func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
-	// Настраиваем логгер GORM
-	logLevel := gormlogger.Silent
-	if debug {
-		logLevel = gormlogger.Info
-	}
-
-	db, err := gorm.Open(mysql.Open(cfg.DSN()), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(logLevel),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ошибка подключения к MySQL: %w", err)
-	}
-
-	// Настраиваем пул соединений
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка получения sql.DB: %w", err)
-	}
-
-	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-
-	return db, nil
-}
-
-// connectRedis создаёт клиент Redis.
-func connectRedis(cfg config.RedisConfig) *redis.Client {
-	return redis.NewClient(&redis.Options{
-		Addr:     cfg.Addr(),
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	})
 }

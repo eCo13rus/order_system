@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
@@ -188,12 +189,17 @@ func main() {
 
 	// Запускаем сервер в горутине
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error().Interface("panic", r).Msg("Паника в HTTP сервере")
+			}
+		}()
 		logger.Info().
 			Str("addr", cfg.HTTP.Addr()).
 			Msg("HTTP сервер запущен")
 
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal().Err(err).Msg("Ошибка HTTP сервера")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error().Err(err).Msg("Ошибка HTTP сервера")
 		}
 	}()
 

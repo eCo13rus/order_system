@@ -86,6 +86,9 @@ spec:
         app: user-service
     spec:
       terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
       containers:
         - name: user-service
           image: ghcr.io/eco13rus/order-system/user:latest
@@ -101,12 +104,25 @@ spec:
             - name: jwt-keys
               mountPath: /secrets/jwt
               readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           livenessProbe:
             httpGet:
               path: /healthz
               port: 9090
             initialDelaySeconds: 5
             periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+            initialDelaySeconds: 3
+            periodSeconds: 5
       volumes:
         - name: jwt-keys
           secret:
@@ -147,6 +163,9 @@ spec:
         app: order-service
     spec:
       terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
       containers:
         - name: order-service
           image: ghcr.io/eco13rus/order-system/order:latest
@@ -162,12 +181,25 @@ spec:
             - name: jwt-keys
               mountPath: /secrets/jwt
               readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           livenessProbe:
             httpGet:
               path: /healthz
               port: 9090
             initialDelaySeconds: 5
             periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+            initialDelaySeconds: 3
+            periodSeconds: 5
       volumes:
         - name: jwt-keys
           secret:
@@ -208,6 +240,9 @@ spec:
         app: payment-service
     spec:
       terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
       containers:
         - name: payment-service
           image: ghcr.io/eco13rus/order-system/payment:latest
@@ -223,12 +258,25 @@ spec:
             - name: jwt-keys
               mountPath: /secrets/jwt
               readOnly: true
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           livenessProbe:
             httpGet:
               path: /healthz
               port: 9090
             initialDelaySeconds: 5
             periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+            initialDelaySeconds: 3
+            periodSeconds: 5
       volumes:
         - name: jwt-keys
           secret:

@@ -303,7 +303,7 @@ func TestLogin(t *testing.T) {
 			mockJWT := new(MockJWTManager)
 			tt.mockSetup(mockRepo, mockJWT)
 
-			svc := NewUserService(mockRepo, mockJWT)
+			svc := NewUserService(mockRepo, mockJWT, nil)
 			tokens, err := svc.Login(context.Background(), tt.email, tt.password)
 
 			if tt.expectedErr != nil {
@@ -384,7 +384,7 @@ func TestLogout(t *testing.T) {
 			mockJWT.SetBlacklist(mockBlacklist)
 			tt.mockSetup(mockJWT, mockBlacklist)
 
-			svc := NewUserService(mockRepo, mockJWT)
+			svc := NewUserService(mockRepo, mockJWT, nil)
 			err := svc.Logout(context.Background(), tt.token)
 
 			if tt.expectedErr != nil {
@@ -421,7 +421,7 @@ func TestLogoutWithNilBlacklist(t *testing.T) {
 	// НЕ вызываем SetBlacklist — blacklist остаётся nil
 	mockJWT.On("ValidateToken", "valid-token").Return(validClaims, nil)
 
-	svc := NewUserService(mockRepo, mockJWT)
+	svc := NewUserService(mockRepo, mockJWT, nil)
 	err := svc.Logout(context.Background(), "valid-token")
 
 	// Ожидаем успех — logout без blacklist не должен падать
@@ -504,7 +504,7 @@ func TestValidateToken(t *testing.T) {
 			mockJWT := new(MockJWTManager)
 			tt.mockSetup(mockRepo, mockJWT)
 
-			svc := NewUserService(mockRepo, mockJWT)
+			svc := NewUserService(mockRepo, mockJWT, nil)
 			result, err := svc.ValidateToken(context.Background(), tt.token)
 
 			if tt.expectedErr != nil {

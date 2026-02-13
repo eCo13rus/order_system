@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -55,15 +56,18 @@ type UserService interface {
 
 // userService — реализация UserService.
 type userService struct {
-	repo       repository.UserRepository
-	jwtManager JWTManager
+	repo         repository.UserRepository
+	jwtManager   JWTManager
+	loginLimiter LoginLimiter // nil = без ограничений (для тестов без Redis)
 }
 
 // NewUserService создаёт новый сервис пользователей.
-func NewUserService(repo repository.UserRepository, jwtManager JWTManager) UserService {
+// loginLimiter может быть nil — тогда защита от brute-force отключена.
+func NewUserService(repo repository.UserRepository, jwtManager JWTManager, loginLimiter LoginLimiter) UserService {
 	return &userService{
-		repo:       repo,
-		jwtManager: jwtManager,
+		repo:         repo,
+		jwtManager:   jwtManager,
+		loginLimiter: loginLimiter,
 	}
 }
 
@@ -124,14 +128,29 @@ func (s *userService) Register(ctx context.Context, email, password, name string
 }
 
 // Login аутентифицирует пользователя и возвращает токены.
+// При включённом LoginLimiter: после 5 неудачных попыток блокирует аккаунт на 15 минут.
 func (s *userService) Login(ctx context.Context, email, password string) (*domain.TokenPair, error) {
 	log := logger.FromContext(ctx)
+
+	// Проверяем блокировку аккаунта (если limiter настроен)
+	if s.loginLimiter != nil {
+		locked, err := s.loginLimiter.IsLocked(ctx, email)
+		if err != nil {
+			log.Error().Err(err).Str("email", email).Msg("Ошибка проверки блокировки аккаунта")
+			// При ошибке Redis — пропускаем проверку, не блокируем пользователя
+		} else if locked {
+			log.Warn().Str("email", email).Msg("Попытка входа в заблокированный аккаунт")
+			return nil, domain.ErrAccountLocked
+		}
+	}
 
 	// Получаем пользователя по email
 	user, err := s.repo.GetByEmail(ctx, email)
 	if err != nil {
-		if err == domain.ErrUserNotFound {
+		if errors.Is(err, domain.ErrUserNotFound) {
 			log.Warn().Str("email", email).Msg("Попытка входа с несуществующим email")
+			// Записываем неудачную попытку (защита от перебора email)
+			s.recordLoginFailure(ctx, email)
 			return nil, domain.ErrInvalidCredentials
 		}
 		log.Error().Err(err).Str("email", email).Msg("Ошибка получения пользователя")
@@ -141,8 +160,12 @@ func (s *userService) Login(ctx context.Context, email, password string) (*domai
 	// Проверяем пароль
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
 		log.Warn().Str("email", email).Str("user_id", user.ID).Msg("Неверный пароль")
+		s.recordLoginFailure(ctx, email)
 		return nil, domain.ErrInvalidCredentials
 	}
+
+	// Успешный вход — сбрасываем счётчик попыток
+	s.resetLoginAttempts(ctx, email)
 
 	// Генерируем токены через pkg/jwt
 	tokenPair, err := s.jwtManager.GenerateTokenPair(user.ID, "")
@@ -161,6 +184,28 @@ func (s *userService) Login(ctx context.Context, email, password string) (*domai
 		RefreshToken: tokenPair.RefreshToken,
 		ExpiresAt:    tokenPair.ExpiresAt,
 	}, nil
+}
+
+// recordLoginFailure записывает неудачную попытку входа (если limiter доступен).
+func (s *userService) recordLoginFailure(ctx context.Context, email string) {
+	if s.loginLimiter == nil {
+		return
+	}
+	if err := s.loginLimiter.RecordFailure(ctx, email); err != nil {
+		log := logger.FromContext(ctx)
+		log.Error().Err(err).Str("email", email).Msg("Ошибка записи неудачной попытки входа")
+	}
+}
+
+// resetLoginAttempts сбрасывает счётчик попыток после успешного входа.
+func (s *userService) resetLoginAttempts(ctx context.Context, email string) {
+	if s.loginLimiter == nil {
+		return
+	}
+	if err := s.loginLimiter.ResetAttempts(ctx, email); err != nil {
+		log := logger.FromContext(ctx)
+		log.Error().Err(err).Str("email", email).Msg("Ошибка сброса счётчика попыток")
+	}
 }
 
 // Logout инвалидирует токен.
@@ -208,7 +253,7 @@ func (s *userService) ValidateToken(ctx context.Context, accessToken string) (*d
 	// Получаем email пользователя из БД для полноты данных
 	user, err := s.repo.GetByID(ctx, claims.UserID)
 	if err != nil {
-		if err == domain.ErrUserNotFound {
+		if errors.Is(err, domain.ErrUserNotFound) {
 			log.Warn().Str("user_id", claims.UserID).Msg("Токен валиден, но пользователь не найден")
 			return nil, domain.ErrUserNotFound
 		}
@@ -231,7 +276,7 @@ func (s *userService) GetUser(ctx context.Context, userID string) (*domain.User,
 
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		if err == domain.ErrUserNotFound {
+		if errors.Is(err, domain.ErrUserNotFound) {
 			log.Debug().Str("user_id", userID).Msg("Пользователь не найден")
 			return nil, err
 		}

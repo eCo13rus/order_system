@@ -3,6 +3,7 @@ package jwt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -66,7 +67,7 @@ func (b *Blacklist) InvalidateUser(ctx context.Context, userID string, refreshTT
 // Возвращает true, если токен отозван (iat < timestamp инвалидации).
 func (b *Blacklist) IsUserInvalidated(ctx context.Context, userID string, issuedAt time.Time) (bool, error) {
 	val, err := b.redis.Get(ctx, prefixUser+userID).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return false, nil // Нет записи — пользователь не инвалидирован
 	}
 	if err != nil {

@@ -146,18 +146,21 @@ func TestUserHandler_GetMe(t *testing.T) {
 }
 
 // TestUserHandler_GetUser проверяет обработчик получения пользователя по ID.
+// Учитывает IDOR-защиту: user_id из JWT должен совпадать с запрашиваемым :id.
 func TestUserHandler_GetUser(t *testing.T) {
 	tests := []struct {
 		name           string
-		paramID        string // параметр :id из URL
+		paramID        string      // параметр :id из URL
+		userIDInCtx    interface{} // user_id из JWT; nil — не устанавливать
 		setupMock      func(*MockUserService)
 		expectedStatus int
 		expectedError  string
 		checkResponse  func(*testing.T, *httptest.ResponseRecorder)
 	}{
 		{
-			name:    "Успешное получение пользователя по ID",
-			paramID: "user-uuid-456",
+			name:        "Успешное получение своего профиля по ID",
+			paramID:     "user-uuid-456",
+			userIDInCtx: "user-uuid-456", // совпадает с paramID — разрешено
 			setupMock: func(m *MockUserService) {
 				m.GetUserFunc = func(ctx context.Context, userID string) (*client.User, error) {
 					if userID != "user-uuid-456" {
@@ -185,13 +188,31 @@ func TestUserHandler_GetUser(t *testing.T) {
 		{
 			name:           "Пустой ID пользователя",
 			paramID:        "",
+			userIDInCtx:    "some-user",
 			setupMock:      func(m *MockUserService) {},
 			expectedStatus: http.StatusBadRequest,
 			expectedError:  "invalid_request",
 		},
 		{
-			name:    "Пользователь не найден",
-			paramID: "non-existent-uuid",
+			name:           "IDOR — попытка доступа к чужому профилю",
+			paramID:        "other-user-uuid",
+			userIDInCtx:    "my-user-uuid", // не совпадает с paramID
+			setupMock:      func(m *MockUserService) {},
+			expectedStatus: http.StatusForbidden,
+			expectedError:  "forbidden",
+		},
+		{
+			name:           "Отсутствует user_id в контексте (нет авторизации)",
+			paramID:        "user-uuid-123",
+			userIDInCtx:    nil,
+			setupMock:      func(m *MockUserService) {},
+			expectedStatus: http.StatusUnauthorized,
+			expectedError:  "unauthorized",
+		},
+		{
+			name:        "Пользователь не найден",
+			paramID:     "non-existent-uuid",
+			userIDInCtx: "non-existent-uuid", // совпадает — IDOR пройден, но gRPC вернёт NotFound
 			setupMock: func(m *MockUserService) {
 				m.GetUserFunc = func(ctx context.Context, userID string) (*client.User, error) {
 					return nil, status.Error(codes.NotFound, "пользователь не найден")
@@ -201,8 +222,9 @@ func TestUserHandler_GetUser(t *testing.T) {
 			expectedError:  "not_found",
 		},
 		{
-			name:    "gRPC ошибка — невалидный ID",
-			paramID: "invalid-format",
+			name:        "gRPC ошибка — невалидный ID",
+			paramID:     "invalid-format",
+			userIDInCtx: "invalid-format",
 			setupMock: func(m *MockUserService) {
 				m.GetUserFunc = func(ctx context.Context, userID string) (*client.User, error) {
 					return nil, status.Error(codes.InvalidArgument, "невалидный формат ID")
@@ -212,8 +234,9 @@ func TestUserHandler_GetUser(t *testing.T) {
 			expectedError:  "invalid_argument",
 		},
 		{
-			name:    "gRPC ошибка — доступ запрещён",
-			paramID: "private-user-uuid",
+			name:        "gRPC ошибка — доступ запрещён",
+			paramID:     "private-user-uuid",
+			userIDInCtx: "private-user-uuid",
 			setupMock: func(m *MockUserService) {
 				m.GetUserFunc = func(ctx context.Context, userID string) (*client.User, error) {
 					return nil, status.Error(codes.PermissionDenied, "доступ запрещён")
@@ -223,8 +246,9 @@ func TestUserHandler_GetUser(t *testing.T) {
 			expectedError:  "permission_denied",
 		},
 		{
-			name:    "gRPC ошибка — сервис недоступен",
-			paramID: "user-uuid-123",
+			name:        "gRPC ошибка — сервис недоступен",
+			paramID:     "user-uuid-123",
+			userIDInCtx: "user-uuid-123",
 			setupMock: func(m *MockUserService) {
 				m.GetUserFunc = func(ctx context.Context, userID string) (*client.User, error) {
 					return nil, status.Error(codes.Unavailable, "сервис временно недоступен")
@@ -252,6 +276,11 @@ func TestUserHandler_GetUser(t *testing.T) {
 			// Устанавливаем параметр :id (Gin использует Params)
 			c.Params = gin.Params{
 				{Key: "id", Value: tt.paramID},
+			}
+
+			// Устанавливаем user_id в контексте (имитация JWT middleware)
+			if tt.userIDInCtx != nil {
+				c.Set("user_id", tt.userIDInCtx)
 			}
 
 			// Вызываем handler

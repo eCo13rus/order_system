@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"example.com/order-system/pkg/kafka"
+	"example.com/order-system/pkg/outbox"
 	"example.com/order-system/services/payment/internal/domain"
-	"example.com/order-system/services/payment/internal/outbox"
 	"example.com/order-system/services/payment/internal/service"
 )
 
@@ -49,6 +49,10 @@ func (m *mockOutboxRepo) MarkProcessed(ctx context.Context, id string) error {
 
 func (m *mockOutboxRepo) MarkFailed(ctx context.Context, id string, err error) error {
 	return nil // Не используется в тестах command_handler
+}
+
+func (m *mockOutboxRepo) DeleteProcessedBefore(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil // Не используется в тестах command_handler
 }
 
 // mockPaymentService — мок для тестирования saga handler.

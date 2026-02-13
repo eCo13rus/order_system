@@ -31,9 +31,10 @@ type OrderRepository interface {
 	ListByUserID(ctx context.Context, userID string, status *domain.OrderStatus, offset, limit int) ([]*domain.Order, int64, error)
 
 	// UpdateStatus атомарно обновляет статус заказа.
+	// expectedStatus — текущий ожидаемый статус (защита от TOCTOU race condition).
 	// paymentID устанавливается при подтверждении оплаты.
 	// failureReason устанавливается при ошибке/отмене.
-	UpdateStatus(ctx context.Context, orderID string, status domain.OrderStatus, paymentID, failureReason *string) error
+	UpdateStatus(ctx context.Context, orderID string, expectedStatus, newStatus domain.OrderStatus, paymentID, failureReason *string) error
 }
 
 // OrderModel — GORM модель для таблицы orders.
@@ -275,10 +276,12 @@ func (r *orderRepository) ListByUserID(ctx context.Context, userID string, statu
 	return orders, totalCount, nil
 }
 
-// UpdateStatus атомарно обновляет статус заказа.
-func (r *orderRepository) UpdateStatus(ctx context.Context, id string, status domain.OrderStatus, paymentID, failureReason *string) error {
+// UpdateStatus атомарно обновляет статус заказа с проверкой текущего статуса.
+// Использует WHERE id = ? AND status = ? для защиты от TOCTOU race condition:
+// между чтением заказа и обновлением статус мог измениться (например, saga подтвердила платёж).
+func (r *orderRepository) UpdateStatus(ctx context.Context, id string, expectedStatus, newStatus domain.OrderStatus, paymentID, failureReason *string) error {
 	updates := map[string]interface{}{
-		"status":     string(status),
+		"status":     string(newStatus),
 		"updated_at": time.Now(),
 	}
 
@@ -290,9 +293,10 @@ func (r *orderRepository) UpdateStatus(ctx context.Context, id string, status do
 		updates["failure_reason"] = *failureReason
 	}
 
+	// WHERE id = ? AND status = ? — атомарная проверка текущего статуса
 	result := r.db.WithContext(ctx).
 		Model(&OrderModel{}).
-		Where("id = ?", id).
+		Where("id = ? AND status = ?", id, string(expectedStatus)).
 		Updates(updates)
 
 	if result.Error != nil {
@@ -300,7 +304,14 @@ func (r *orderRepository) UpdateStatus(ctx context.Context, id string, status do
 	}
 
 	if result.RowsAffected == 0 {
-		return domain.ErrOrderNotFound
+		// Проверяем: заказ не найден или статус уже изменился
+		var count int64
+		r.db.WithContext(ctx).Model(&OrderModel{}).Where("id = ?", id).Count(&count)
+		if count == 0 {
+			return domain.ErrOrderNotFound
+		}
+		// Заказ существует, но статус уже не PENDING — race condition сработал
+		return domain.ErrOrderCannotCancel
 	}
 
 	return nil

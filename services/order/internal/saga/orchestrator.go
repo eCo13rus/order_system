@@ -2,6 +2,7 @@ package saga
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
+	outboxpkg "example.com/order-system/pkg/outbox"
 	"example.com/order-system/services/order/internal/domain"
 	"example.com/order-system/services/order/internal/repository"
 )
@@ -35,6 +37,10 @@ type Orchestrator interface {
 	// CompensateSaga выполняет откат саги при ошибке.
 	// Помечает заказ как FAILED с указанием причины.
 	CompensateSaga(ctx context.Context, sagaID string, reason string) error
+
+	// IsSagaActive проверяет, есть ли активная (не терминальная) сага для заказа.
+	// Используется для защиты от отмены заказа во время обработки платежа.
+	IsSagaActive(ctx context.Context, orderID string) (bool, error)
 }
 
 // orchestrator — реализация Orchestrator.
@@ -240,7 +246,7 @@ func (o *orchestrator) compensateSagaWithRefund(ctx context.Context, saga *Saga,
 	}
 
 	// 3. Подготавливаем refund outbox (если нужен)
-	var refundOutbox *Outbox
+	var refundOutbox *outboxpkg.Outbox
 	if paymentID != "" {
 		outbox, err := o.buildRefundOutbox(ctx, saga, paymentID)
 		if err != nil {
@@ -271,9 +277,23 @@ func (o *orchestrator) compensateSagaWithRefund(ctx context.Context, saga *Saga,
 	return nil
 }
 
+// IsSagaActive проверяет, есть ли активная (не терминальная) сага для заказа.
+// Возвращает true если сага существует и не в терминальном состоянии (COMPLETED/FAILED).
+func (o *orchestrator) IsSagaActive(ctx context.Context, orderID string) (bool, error) {
+	saga, err := o.sagaRepo.GetByOrderID(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, ErrSagaNotFound) {
+			return false, nil // Саги нет — можно отменять
+		}
+		return false, fmt.Errorf("ошибка проверки саги: %w", err)
+	}
+
+	return !saga.Status.IsTerminal(), nil
+}
+
 // buildRefundOutbox создаёт объект Outbox для RefundPayment команды.
 // НЕ сохраняет в БД — сохранение происходит в атомарной транзакции UpdateWithOrderAndOutbox.
-func (o *orchestrator) buildRefundOutbox(ctx context.Context, saga *Saga, paymentID string) (*Outbox, error) {
+func (o *orchestrator) buildRefundOutbox(ctx context.Context, saga *Saga, paymentID string) (*outboxpkg.Outbox, error) {
 	// Защита от nil StepData — критически важно для избежания panic
 	if saga.StepData == nil {
 		return nil, fmt.Errorf("saga %s: StepData is nil, невозможно создать refund команду", saga.ID)

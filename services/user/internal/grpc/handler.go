@@ -192,6 +192,9 @@ func (h *Handler) mapError(ctx context.Context, err error, method string) error 
 	case errors.Is(err, domain.ErrInvalidCredentials):
 		return status.Error(codes.Unauthenticated, err.Error())
 
+	case errors.Is(err, domain.ErrAccountLocked):
+		return status.Error(codes.ResourceExhausted, err.Error())
+
 	case errors.Is(err, domain.ErrInvalidToken):
 		return status.Error(codes.Unauthenticated, err.Error())
 

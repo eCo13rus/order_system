@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -14,16 +15,15 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"gorm.io/driver/mysql"
-	"gorm.io/gorm"
-	gormlogger "gorm.io/gorm/logger"
 
 	"example.com/order-system/pkg/config"
+	dbpkg "example.com/order-system/pkg/db"
 	"example.com/order-system/pkg/healthcheck"
 	"example.com/order-system/pkg/kafka"
 	"example.com/order-system/pkg/logger"
 	"example.com/order-system/pkg/metrics"
 	"example.com/order-system/pkg/middleware"
+	outboxpkg "example.com/order-system/pkg/outbox"
 	"example.com/order-system/pkg/tracing"
 	orderv1 "example.com/order-system/proto/order/v1"
 	ordergrpc "example.com/order-system/services/order/internal/grpc"
@@ -69,7 +69,7 @@ func main() {
 	// === Подключение к зависимостям ===
 
 	// Подключаемся к MySQL
-	db, err := connectMySQL(cfg.MySQL, cfg.IsDevelopment())
+	db, err := dbpkg.ConnectMySQL(cfg.MySQL, cfg.IsDevelopment())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Ошибка подключения к MySQL")
 	}
@@ -78,13 +78,14 @@ func main() {
 	// Создаём слои приложения (Clean Architecture)
 	orderRepo := repository.NewOrderRepository(db)
 	sagaRepo := saga.NewSagaRepository(db)
-	outboxRepo := saga.NewOutboxRepository(db)
+	outboxRepo := outboxpkg.NewOutboxRepository(db, "order")
 
 	// Создаём Saga Orchestrator (если Kafka настроена)
 	var orchestrator saga.Orchestrator
 	var kafkaProducer *kafka.Producer
-	var outboxWorker *saga.OutboxWorker
+	var outboxWorker *outboxpkg.OutboxWorker
 	var replyConsumer *saga.ReplyConsumer
+	var timeoutWorker *saga.SagaTimeoutWorker
 
 	if len(cfg.Kafka.Brokers) > 0 {
 		log.Info().Strs("brokers", cfg.Kafka.Brokers).Msg("Инициализация Kafka для Saga")
@@ -105,7 +106,7 @@ func main() {
 		orchestrator = saga.NewOrchestrator(sagaRepo, orderRepo)
 
 		// Создаём Outbox Worker
-		outboxWorker = saga.NewOutboxWorker(outboxRepo, kafkaProducer, saga.DefaultWorkerConfig())
+		outboxWorker = outboxpkg.NewOutboxWorker(outboxRepo, kafkaProducer, outboxpkg.DefaultWorkerConfig(), "order")
 
 		// Создаём Reply Consumer
 		kafkaConsumer, err := kafka.NewConsumer(
@@ -118,6 +119,9 @@ func main() {
 		}
 		kafkaConsumer.SetDLQProducer(kafkaProducer)
 		replyConsumer = saga.NewReplyConsumer(kafkaConsumer, orchestrator)
+
+		// Создаём Saga Timeout Worker — обнаруживает и компенсирует зависшие саги
+		timeoutWorker = saga.NewSagaTimeoutWorker(sagaRepo, orchestrator, saga.DefaultTimeoutWorkerConfig())
 
 		log.Info().Msg("Saga Orchestrator инициализирован")
 	} else {
@@ -177,27 +181,61 @@ func main() {
 	defer cancel() // Гарантируем отмену контекста при любом завершении
 
 	// Запускаем Saga компоненты (если Kafka настроена)
+	var workersWg sync.WaitGroup // WaitGroup для ожидания завершения фоновых воркеров при shutdown
+
 	if outboxWorker != nil {
+		workersWg.Add(1)
 		go func() {
+			defer workersWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Паника в Outbox Worker")
+				}
+			}()
 			log.Info().Msg("Запуск Outbox Worker")
 			outboxWorker.Run(ctx)
 		}()
 	}
 
 	if replyConsumer != nil {
+		workersWg.Add(1)
 		go func() {
+			defer workersWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Паника в Reply Consumer")
+				}
+			}()
 			log.Info().Msg("Запуск Reply Consumer")
-			if err := replyConsumer.Run(ctx); err != nil && err != context.Canceled {
+			if err := replyConsumer.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error().Err(err).Msg("Ошибка Reply Consumer")
 			}
 		}()
 	}
 
+	if timeoutWorker != nil {
+		workersWg.Add(1)
+		go func() {
+			defer workersWg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Error().Interface("panic", r).Msg("Паника в Saga Timeout Worker")
+				}
+			}()
+			timeoutWorker.Run(ctx)
+		}()
+	}
+
 	// Запускаем gRPC сервер
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error().Interface("panic", r).Msg("Паника в gRPC сервере")
+			}
+		}()
 		log.Info().Str("addr", addr).Msg("gRPC сервер запущен")
 		if err := grpcServer.Serve(listener); err != nil {
-			log.Fatal().Err(err).Msg("Ошибка gRPC сервера")
+			log.Error().Err(err).Msg("Ошибка gRPC сервера")
 		}
 	}()
 
@@ -211,8 +249,23 @@ func main() {
 	// Отменяем контекст — останавливаем Outbox Worker и Reply Consumer
 	cancel()
 
-	// Graceful stop gRPC сервера
-	grpcServer.GracefulStop()
+	// Ждём завершения всех фоновых воркеров перед закрытием ресурсов
+	workersWg.Wait()
+
+	// Graceful stop gRPC сервера с таймаутом 10 секунд.
+	// Если за 10 секунд не завершатся текущие запросы — принудительный Stop().
+	grpcDone := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(grpcDone)
+	}()
+	select {
+	case <-grpcDone:
+		log.Info().Msg("gRPC сервер остановлен корректно")
+	case <-time.After(10 * time.Second):
+		log.Warn().Msg("Таймаут GracefulStop, принудительная остановка gRPC")
+		grpcServer.Stop()
+	}
 
 	// Закрываем Kafka компоненты
 	if replyConsumer != nil {
@@ -251,40 +304,4 @@ func main() {
 	}
 
 	log.Info().Msg("Order Service остановлен")
-}
-
-// connectMySQL создаёт подключение к MySQL через GORM.
-func connectMySQL(cfg config.MySQLConfig, debug bool) (*gorm.DB, error) {
-	// Настраиваем логгер GORM
-	logLevel := gormlogger.Silent
-	if debug {
-		logLevel = gormlogger.Info
-	}
-
-	db, err := gorm.Open(mysql.Open(cfg.DSN()), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(logLevel),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ошибка подключения к MySQL: %w", err)
-	}
-
-	// Проверяем подключение
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, fmt.Errorf("ошибка получения sql.DB: %w", err)
-	}
-
-	if err := sqlDB.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("ошибка ping MySQL: %w", err)
-	}
-
-	// Настраиваем пул соединений
-	sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-
-	return db, nil
 }

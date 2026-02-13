@@ -8,10 +8,6 @@ import (
 	"example.com/order-system/pkg/logger"
 )
 
-// =============================================================================
-// OutboxWorker — воркер для отправки сообщений из outbox в Kafka
-// =============================================================================
-
 // KafkaProducer — интерфейс для отправки сообщений в Kafka.
 // Позволяет замокать kafka.Producer в unit-тестах (Dependency Inversion).
 type KafkaProducer interface {
@@ -41,41 +37,72 @@ func DefaultWorkerConfig() WorkerConfig {
 }
 
 // OutboxWorker читает записи из outbox и отправляет их в Kafka.
-// Реализует гарантию "at-least-once" доставки saga.replies.
+// Реализует гарантию "at-least-once" доставки.
 type OutboxWorker struct {
 	repo     OutboxRepository
 	producer KafkaProducer
 	cfg      WorkerConfig
+	name     string // Имя для идентификации в логах (order / payment)
 }
 
 // NewOutboxWorker создаёт новый Outbox Worker.
-func NewOutboxWorker(repo OutboxRepository, producer KafkaProducer, cfg WorkerConfig) *OutboxWorker {
+// name — имя сервиса для логов (например, "order" или "payment").
+func NewOutboxWorker(repo OutboxRepository, producer KafkaProducer, cfg WorkerConfig, name string) *OutboxWorker {
 	return &OutboxWorker{
 		repo:     repo,
 		producer: producer,
 		cfg:      cfg,
+		name:     name,
 	}
 }
+
+// cleanupInterval — интервал очистки обработанных записей outbox (1 час).
+const cleanupInterval = 1 * time.Hour
+
+// cleanupRetention — срок хранения обработанных записей outbox (7 дней).
+const cleanupRetention = 7 * 24 * time.Hour
 
 // Run запускает Worker. Блокирует выполнение до отмены контекста.
 func (w *OutboxWorker) Run(ctx context.Context) {
 	log := logger.FromContext(ctx)
 	log.Info().
+		Str("name", w.name).
 		Dur("poll_interval", w.cfg.PollInterval).
 		Int("batch_size", w.cfg.BatchSize).
-		Msg("Запуск Payment Outbox Worker")
+		Msg("Запуск Outbox Worker")
 
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 
+	cleanupTicker := time.NewTicker(cleanupInterval)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info().Msg("Остановка Payment Outbox Worker")
+			log.Info().Str("name", w.name).Msg("Остановка Outbox Worker")
 			return
 		case <-ticker.C:
 			w.processOutbox(ctx)
+		case <-cleanupTicker.C:
+			w.cleanupProcessed(ctx)
 		}
+	}
+}
+
+// cleanupProcessed удаляет обработанные записи outbox старше 7 дней.
+func (w *OutboxWorker) cleanupProcessed(ctx context.Context) {
+	log := logger.FromContext(ctx)
+
+	before := time.Now().Add(-cleanupRetention)
+	deleted, err := w.repo.DeleteProcessedBefore(ctx, before)
+	if err != nil {
+		log.Error().Err(err).Str("name", w.name).Msg("Ошибка очистки outbox")
+		return
+	}
+
+	if deleted > 0 {
+		log.Info().Int64("deleted", deleted).Str("name", w.name).Msg("Очистка обработанных записей outbox")
 	}
 }
 
@@ -86,7 +113,7 @@ func (w *OutboxWorker) processOutbox(ctx context.Context) {
 	// Получаем необработанные записи
 	records, err := w.repo.GetUnprocessed(ctx, w.cfg.BatchSize)
 	if err != nil {
-		log.Error().Err(err).Msg("Ошибка чтения outbox")
+		log.Error().Err(err).Str("name", w.name).Msg("Ошибка чтения outbox")
 		return
 	}
 
@@ -94,7 +121,7 @@ func (w *OutboxWorker) processOutbox(ctx context.Context) {
 		return
 	}
 
-	log.Debug().Int("count", len(records)).Msg("Обработка записей payment outbox")
+	log.Debug().Int("count", len(records)).Str("name", w.name).Msg("Обработка записей outbox")
 
 	for _, record := range records {
 		// Проверяем контекст перед обработкой
@@ -141,7 +168,7 @@ func (w *OutboxWorker) sendToKafka(ctx context.Context, record *Outbox) {
 			Err(err).
 			Str("outbox_id", record.ID).
 			Str("topic", record.Topic).
-			Msg("Ошибка отправки reply в Kafka")
+			Msg("Ошибка отправки в Kafka")
 
 		if markErr := w.repo.MarkFailed(ctx, record.ID, err); markErr != nil {
 			log.Error().Err(markErr).Str("outbox_id", record.ID).Msg("Ошибка пометки outbox как failed")
@@ -162,5 +189,22 @@ func (w *OutboxWorker) sendToKafka(ctx context.Context, record *Outbox) {
 		Str("outbox_id", record.ID).
 		Str("topic", record.Topic).
 		Str("event_type", record.EventType).
-		Msg("Reply отправлен в Kafka через outbox")
+		Msg("Сообщение отправлено в Kafka")
+}
+
+// ProcessSingle обрабатывает одну запись outbox (для тестирования).
+func (w *OutboxWorker) ProcessSingle(ctx context.Context, record *Outbox) error {
+	msg := &kafka.Message{
+		Topic:   record.Topic,
+		Key:     []byte(record.MessageKey),
+		Value:   record.Payload,
+		Headers: record.Headers,
+	}
+
+	if err := w.producer.SendMessage(ctx, msg); err != nil {
+		_ = w.repo.MarkFailed(ctx, record.ID, err)
+		return err
+	}
+
+	return w.repo.MarkProcessed(ctx, record.ID)
 }

@@ -52,6 +52,12 @@ func NewRouter(cfg RouterConfig) *Router {
 	// Стандартные middleware Gin
 	engine.Use(gin.Recovery())
 
+	// CORS — обработка cross-origin запросов
+	engine.Use(middleware.CORS(middleware.DefaultCORSConfig()))
+
+	// Security headers — защита от clickjacking, MIME-sniffing, XSS
+	engine.Use(middleware.SecurityHeaders())
+
 	// OpenTelemetry tracing — создаёт spans для Jaeger
 	engine.Use(otelgin.Middleware("gateway"))
 

@@ -63,6 +63,9 @@ func HandleGRPCError(c *gin.Context, err error, method string) {
 	case codes.PermissionDenied:
 		httpStatus = http.StatusForbidden
 		errorCode = "permission_denied"
+	case codes.ResourceExhausted:
+		httpStatus = http.StatusTooManyRequests
+		errorCode = "account_locked"
 	case codes.FailedPrecondition:
 		httpStatus = http.StatusConflict
 		errorCode = "failed_precondition"

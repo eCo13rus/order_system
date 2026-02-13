@@ -30,6 +30,9 @@ var (
 	// ErrOrderCannotCancel возвращается при попытке отменить заказ в неподходящем статусе.
 	ErrOrderCannotCancel = errors.New("заказ нельзя отменить в текущем статусе")
 
+	// ErrOrderSagaActive возвращается при попытке отменить заказ с активной сагой (платёж обрабатывается).
+	ErrOrderSagaActive = errors.New("нельзя отменить заказ: платёж обрабатывается")
+
 	// ErrOrderCannotConfirm возвращается при попытке подтвердить заказ в неподходящем статусе.
 	ErrOrderCannotConfirm = errors.New("заказ нельзя подтвердить в текущем статусе")
 

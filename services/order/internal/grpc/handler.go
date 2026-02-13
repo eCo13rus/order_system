@@ -308,6 +308,9 @@ func (h *Handler) mapError(ctx context.Context, err error, method string) error 
 	case errors.Is(err, domain.ErrOrderCannotCancel):
 		return status.Error(codes.FailedPrecondition, err.Error())
 
+	case errors.Is(err, domain.ErrOrderSagaActive):
+		return status.Error(codes.FailedPrecondition, err.Error())
+
 	case errors.Is(err, domain.ErrInvalidUserID):
 		return status.Error(codes.InvalidArgument, err.Error())
 

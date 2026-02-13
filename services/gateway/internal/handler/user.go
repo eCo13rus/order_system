@@ -77,15 +77,38 @@ func (h *UserHandler) GetMe(c *gin.Context) {
 
 // GetUser возвращает информацию о пользователе по ID.
 // GET /api/v1/users/:id
-// Требует авторизации.
+// Требует авторизации. Пользователь может запрашивать только свой профиль (защита от IDOR).
 func (h *UserHandler) GetUser(c *gin.Context) {
 	ctx := c.Request.Context()
+	log := logger.FromContext(ctx)
 
 	userID := c.Param("id")
 	if userID == "" {
 		c.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
 			Message: "ID пользователя обязателен",
+		})
+		return
+	}
+
+	// Защита от IDOR: проверяем, что запрашиваемый ID совпадает с ID из JWT
+	authenticatedUserID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "Требуется авторизация",
+		})
+		return
+	}
+
+	if authenticatedUserID != userID {
+		log.Warn().
+			Str("requested_id", userID).
+			Interface("authenticated_id", authenticatedUserID).
+			Msg("Попытка доступа к чужому профилю (IDOR)")
+		c.JSON(http.StatusForbidden, ErrorResponse{
+			Error:   "forbidden",
+			Message: "Доступ к чужому профилю запрещён",
 		})
 		return
 	}

@@ -49,6 +49,6 @@ func (m *MockOrderRepository) ListByUserID(ctx context.Context, userID string, s
 	return args.Get(0).([]*domain.Order), args.Get(1).(int64), args.Error(2)
 }
 
-func (m *MockOrderRepository) UpdateStatus(ctx context.Context, orderID string, status domain.OrderStatus, paymentID, failureReason *string) error {
-	return m.Called(ctx, orderID, status, paymentID, failureReason).Error(0)
+func (m *MockOrderRepository) UpdateStatus(ctx context.Context, orderID string, expectedStatus, newStatus domain.OrderStatus, paymentID, failureReason *string) error {
+	return m.Called(ctx, orderID, expectedStatus, newStatus, paymentID, failureReason).Error(0)
 }

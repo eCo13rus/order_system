@@ -203,6 +203,8 @@ func (s *orderService) ListOrders(ctx context.Context, userID string, status *do
 
 // CancelOrder отменяет заказ.
 // failure_reason не заполняется — это поле только для статуса FAILED (Saga).
+// ВАЖНО: если сага активна (платёж обрабатывается), отмена запрещена —
+// иначе деньги будут списаны, а refund не произойдёт.
 func (s *orderService) CancelOrder(ctx context.Context, orderID string) error {
 	log := logger.FromContext(ctx)
 
@@ -222,6 +224,21 @@ func (s *orderService) CancelOrder(ctx context.Context, orderID string) error {
 		return fmt.Errorf("ошибка получения заказа: %w", err)
 	}
 
+	// Проверяем, нет ли активной саги (платёж в процессе обработки)
+	if s.orchestrator != nil {
+		active, err := s.orchestrator.IsSagaActive(ctx, orderID)
+		if err != nil {
+			log.Error().Err(err).Str("order_id", orderID).Msg("Ошибка проверки активной саги")
+			return fmt.Errorf("ошибка проверки саги: %w", err)
+		}
+		if active {
+			log.Warn().
+				Str("order_id", orderID).
+				Msg("Попытка отменить заказ с активной сагой — платёж обрабатывается")
+			return domain.ErrOrderSagaActive
+		}
+	}
+
 	// Отменяем заказ (Cancel проверяет CanCancel внутри)
 	if err := order.Cancel(); err != nil {
 		log.Warn().
@@ -231,8 +248,8 @@ func (s *orderService) CancelOrder(ctx context.Context, orderID string) error {
 		return err
 	}
 
-	// Сохраняем изменения (paymentID = nil, failureReason = nil)
-	if err := s.repo.UpdateStatus(ctx, orderID, order.Status, nil, nil); err != nil {
+	// Сохраняем изменения с проверкой текущего статуса (защита от TOCTOU race condition)
+	if err := s.repo.UpdateStatus(ctx, orderID, domain.OrderStatusPending, order.Status, nil, nil); err != nil {
 		log.Error().
 			Err(err).
 			Str("order_id", orderID).

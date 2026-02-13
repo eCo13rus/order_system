@@ -25,7 +25,7 @@ func NewProducer(cfg Config) (*Producer, error) {
 
 	writer := &kafka.Writer{
 		Addr:         kafka.TCP(cfg.Brokers...),
-		Balancer:     &kafka.LeastBytes{},
+		Balancer:     &kafka.Hash{},         // Hash гарантирует ordering: одинаковый ключ → одна партиция
 		BatchTimeout: 10 * time.Millisecond, // Быстрая отправка для саги
 		RequiredAcks: kafka.RequireAll,      // Ждём подтверждения от всех ISR реплик
 		Async:        false,                 // По умолчанию sync режим

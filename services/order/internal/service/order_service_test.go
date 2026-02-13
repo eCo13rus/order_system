@@ -43,6 +43,11 @@ func (m *MockOrchestrator) CompensateSaga(ctx context.Context, sagaID string, re
 	return m.Called(ctx, sagaID, reason).Error(0)
 }
 
+func (m *MockOrchestrator) IsSagaActive(ctx context.Context, orderID string) (bool, error) {
+	args := m.Called(ctx, orderID)
+	return args.Bool(0), args.Error(1)
+}
+
 // =====================================
 // Тесты CreateOrder
 // =====================================
@@ -534,7 +539,7 @@ func TestOrderService_CancelOrder(t *testing.T) {
 
 	mockRepo.On("GetByID", mock.Anything, "order-123").Return(pendingOrder, nil)
 	// failure_reason = nil, так как это отмена пользователем, а не системный сбой
-	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
+	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusPending, domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
 		Return(nil)
 
 	svc := NewOrderService(mockRepo, nil)
@@ -607,6 +612,33 @@ func TestOrderService_CancelOrder_WrongStatus(t *testing.T) {
 	}
 }
 
+// TestOrderService_CancelOrder_ActiveSaga тестирует запрет отмены при активной саге.
+func TestOrderService_CancelOrder_ActiveSaga(t *testing.T) {
+	mockRepo := new(MockOrderRepository)
+	mockOrch := new(MockOrchestrator)
+
+	pendingOrder := &domain.Order{
+		ID:     "order-123",
+		UserID: "user-123",
+		Status: domain.OrderStatusPending,
+	}
+
+	mockRepo.On("GetByID", mock.Anything, "order-123").Return(pendingOrder, nil)
+	// Сага активна — платёж обрабатывается
+	mockOrch.On("IsSagaActive", mock.Anything, "order-123").Return(true, nil)
+
+	svc := NewOrderService(mockRepo, mockOrch)
+
+	err := svc.CancelOrder(context.Background(), "order-123")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrOrderSagaActive)
+
+	// UpdateStatus НЕ должен вызываться
+	mockRepo.AssertNotCalled(t, "UpdateStatus")
+	mockOrch.AssertExpectations(t)
+}
+
 // TestOrderService_CancelOrder_DBError тестирует ошибку БД при отмене заказа.
 func TestOrderService_CancelOrder_DBError(t *testing.T) {
 	mockRepo := new(MockOrderRepository)
@@ -618,7 +650,7 @@ func TestOrderService_CancelOrder_DBError(t *testing.T) {
 	}
 
 	mockRepo.On("GetByID", mock.Anything, "order-123").Return(pendingOrder, nil)
-	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
+	mockRepo.On("UpdateStatus", mock.Anything, "order-123", domain.OrderStatusPending, domain.OrderStatusCancelled, (*string)(nil), (*string)(nil)).
 		Return(errors.New("database error"))
 
 	svc := NewOrderService(mockRepo, nil)

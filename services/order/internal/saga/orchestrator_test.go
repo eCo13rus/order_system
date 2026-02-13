@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	outboxpkg "example.com/order-system/pkg/outbox"
 	"example.com/order-system/services/order/internal/domain"
 )
 
@@ -38,13 +39,13 @@ func TestOrchestrator_CreateOrderWithSaga_Success(t *testing.T) {
 	}
 
 	// Ожидаем атомарное создание order + saga + outbox
-	sagaRepo.On("CreateOrderWithSagaAndOutbox", ctx, order, mock.AnythingOfType("*saga.Saga"), mock.AnythingOfType("*saga.Outbox")).
+	sagaRepo.On("CreateOrderWithSagaAndOutbox", ctx, order, mock.AnythingOfType("*saga.Saga"), mock.AnythingOfType("*outbox.Outbox")).
 		Run(func(args mock.Arguments) {
 			saga := args.Get(2).(*Saga)
 			assert.Equal(t, StatusPaymentPending, saga.Status)
 			assert.Equal(t, "order-123", saga.OrderID)
 
-			outbox := args.Get(3).(*Outbox)
+			outbox := args.Get(3).(*outboxpkg.Outbox)
 			assert.Equal(t, "order-123", outbox.AggregateID)
 			assert.Equal(t, string(CommandProcessPayment), outbox.EventType)
 		}).
@@ -153,7 +154,7 @@ func TestOrchestrator_HandlePaymentReply_Failed(t *testing.T) {
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
 	// Атомарное обновление саги, заказа и outbox (outbox = nil, т.к. нет PaymentID)
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).Return(nil)
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*outboxpkg.Outbox)(nil)).Return(nil)
 
 	err := orch.HandlePaymentReply(ctx, reply)
 
@@ -236,7 +237,7 @@ func TestOrchestrator_CompensateSaga_Success(t *testing.T) {
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
 	// Атомарное обновление саги, заказа и outbox (outbox = nil, т.к. CompensateSaga без refund)
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).Return(nil)
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*outboxpkg.Outbox)(nil)).Return(nil)
 
 	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")
 
@@ -298,10 +299,10 @@ func TestOrchestrator_HandlePaymentReply_FailedWithRefund(t *testing.T) {
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
 	// Атомарное обновление саги, заказа И создание refund outbox в одной транзакции
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), mock.AnythingOfType("*saga.Outbox")).
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), mock.AnythingOfType("*outbox.Outbox")).
 		Run(func(args mock.Arguments) {
 			// Проверяем, что outbox для refund передан и корректен
-			outbox := args.Get(6).(*Outbox)
+			outbox := args.Get(6).(*outboxpkg.Outbox)
 			assert.NotNil(t, outbox, "Outbox для refund должен быть создан")
 			assert.Equal(t, string(CommandRefundPayment), outbox.EventType)
 			assert.Equal(t, "order-456", outbox.AggregateID)
@@ -351,7 +352,7 @@ func TestOrchestrator_HandlePaymentReply_FailedWithoutRefund(t *testing.T) {
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
 	// Атомарное обновление саги, заказа (outbox = nil, т.к. нет PaymentID)
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).Return(nil)
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*outboxpkg.Outbox)(nil)).Return(nil)
 
 	err := orch.HandlePaymentReply(ctx, reply)
 
@@ -398,7 +399,7 @@ func TestOrchestrator_HandlePaymentReply_FailedWithRefund_NilStepData(t *testing
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
 	// Атомарное обновление саги, заказа (outbox = nil, т.к. buildRefundOutbox вернёт ошибку)
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).Return(nil)
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*outboxpkg.Outbox)(nil)).Return(nil)
 
 	// Компенсация должна продолжиться, несмотря на ошибку создания refund outbox
 	err := orch.HandlePaymentReply(ctx, reply)
@@ -648,7 +649,7 @@ func TestOrchestrator_CompensateSaga_UpdateError(t *testing.T) {
 
 	sagaRepo.On("GetByID", ctx, "saga-123").Return(saga, nil)
 	orderRepo.On("GetByID", ctx, "order-456").Return(order, nil)
-	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*Outbox)(nil)).
+	sagaRepo.On("UpdateWithOrderAndOutbox", ctx, mock.AnythingOfType("*saga.Saga"), "order-456", domain.OrderStatusFailed, (*string)(nil), mock.AnythingOfType("*string"), (*outboxpkg.Outbox)(nil)).
 		Return(errors.New("db connection lost"))
 
 	err := orch.CompensateSaga(ctx, "saga-123", "Тестовая ошибка")

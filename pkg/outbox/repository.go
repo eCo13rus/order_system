@@ -8,15 +8,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// =============================================================================
-// Ошибки
-// =============================================================================
-
+// ErrOutboxNotFound — запись outbox не найдена.
 var ErrOutboxNotFound = errors.New("запись outbox не найдена")
-
-// =============================================================================
-// OutboxRepository — интерфейс для работы с таблицей outbox
-// =============================================================================
 
 // OutboxRepository определяет методы работы с outbox.
 // Интерфейс для тестируемости (Dependency Inversion).
@@ -32,25 +25,28 @@ type OutboxRepository interface {
 
 	// MarkFailed увеличивает счётчик ошибок и сохраняет текст ошибки.
 	MarkFailed(ctx context.Context, id string, err error) error
+
+	// DeleteProcessedBefore удаляет обработанные записи старше указанного времени.
+	// Возвращает количество удалённых записей. Используется для очистки outbox.
+	DeleteProcessedBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
-// =============================================================================
-// GORM реализация
-// =============================================================================
-
 // outboxRepository — GORM реализация OutboxRepository.
+// aggregateType фильтрует записи по типу агрегата ("order" / "payment").
 type outboxRepository struct {
-	db *gorm.DB
+	db            *gorm.DB
+	aggregateType string
 }
 
 // NewOutboxRepository создаёт новый репозиторий outbox.
-func NewOutboxRepository(db *gorm.DB) OutboxRepository {
-	return &outboxRepository{db: db}
+// aggregateType — тип агрегата для фильтрации ("order" / "payment").
+func NewOutboxRepository(db *gorm.DB, aggregateType string) OutboxRepository {
+	return &outboxRepository{db: db, aggregateType: aggregateType}
 }
 
 // Create создаёт новую запись outbox.
 func (r *outboxRepository) Create(ctx context.Context, record *Outbox) error {
-	model := modelFromDomain(record)
+	model := ModelFromDomain(record)
 	if err := r.db.WithContext(ctx).Create(model).Error; err != nil {
 		return err
 	}
@@ -64,7 +60,7 @@ func (r *outboxRepository) GetUnprocessed(ctx context.Context, limit int) ([]*Ou
 	var models []OutboxModel
 
 	if err := r.db.WithContext(ctx).
-		Where("processed_at IS NULL AND aggregate_type = ?", "payment").
+		Where("processed_at IS NULL AND aggregate_type = ?", r.aggregateType).
 		Order("retry_count ASC, created_at ASC").
 		Limit(limit).
 		Find(&models).Error; err != nil {
@@ -73,7 +69,7 @@ func (r *outboxRepository) GetUnprocessed(ctx context.Context, limit int) ([]*Ou
 
 	result := make([]*Outbox, len(models))
 	for i := range models {
-		result[i] = models[i].toDomain()
+		result[i] = models[i].ToDomain()
 	}
 	return result, nil
 }
@@ -109,4 +105,17 @@ func (r *outboxRepository) MarkFailed(ctx context.Context, id string, err error)
 		return ErrOutboxNotFound
 	}
 	return nil
+}
+
+// DeleteProcessedBefore удаляет обработанные записи outbox старше указанного времени.
+// Удаляет пачками по 1000 для предотвращения длинных блокировок.
+func (r *outboxRepository) DeleteProcessedBefore(ctx context.Context, before time.Time) (int64, error) {
+	result := r.db.WithContext(ctx).
+		Where("processed_at IS NOT NULL AND processed_at < ? AND aggregate_type = ?", before, r.aggregateType).
+		Limit(1000).
+		Delete(&OutboxModel{})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
